@@ -495,6 +495,37 @@ window.STPhone.Apps.Messages = (function() {
         syncExternalMessage, // 외부 노출 필수
         getTotalUnread,
         updateMessagesBadge,
-        addHiddenLog: (speaker, text) => console.log(speaker, text)
+    function addHiddenLog(speaker, text) {
+        if (!window.SillyTavern) return;
+        
+        const context = window.SillyTavern.getContext();
+        // 채팅방이 열려있지 않거나(chatId 없음), 채팅 데이터가 없으면 중단
+        if (!context || !context.chat || !context.chatId) {
+            console.warn('[Messages] 채팅방이 열려있지 않아 로그 저장을 건너뜁니다.');
+            return;
+        }
+
+        const newMessage = {
+            name: speaker,
+            is_user: false,
+            is_system: false,
+            send_date: Date.now(),
+            mes: text,
+            extra: { is_phone_log: true }
+        };
+
+        context.chat.push(newMessage);
+
+        // [수정] 안전하게 저장 명령 호출
+        // context.chatId가 확실히 있을 때만 저장 시도
+        if (window.SlashCommandParser && window.SlashCommandParser.commands['savechat']) {
+            // 현재 채팅 파일명을 명시적으로 넘겨주거나, 에러를 방지하기 위해 try-catch 감싸기
+            try {
+                window.SlashCommandParser.commands['savechat'].callback({});
+            } catch (e) {
+                console.error('[Messages] 자동 저장 실패 (무시됨):', e);
+            }
+        }
+    }
     };
 })();
