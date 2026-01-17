@@ -2043,16 +2043,69 @@ window.STPhone.Apps.Messages = (function() {
         getMessages,
         addMessage,
         syncExternalMessage: async (sender, text) => {
-            const contacts = window.STPhone.Apps?.Contacts?.getAllContacts() || [];
-            if (contacts.length === 0) return;
+            if (!text) return;
+
+            // 1. 연락처 확인 및 자동 생성
+            let contacts = window.STPhone.Apps?.Contacts?.getAllContacts() || [];
+            if (contacts.length === 0) {
+                console.log('[Messages] 연락처가 없어 자동 동기화를 시도합니다.');
+                await window.STPhone.Apps.Contacts.syncAutoContacts();
+                contacts = window.STPhone.Apps.Contacts.getAllContacts();
+                if (contacts.length === 0) return; // 그래도 없으면 중단
+            }
             const firstContact = contacts[0];
-            await addMessage(firstContact.id, sender, text); // [Async]
+            const contactId = firstContact.id;
+
+            // 2. 메시지 줄바꿈(\n) 단위로 쪼개기
+            const lines = text.split('\n').filter(l => l.trim() !== '');
+
+            // 3. 한 줄씩 순서대로 저장 및 표시 (순차 처리)
+            for (const line of lines) {
+                // (1) 이미지 태그 처리 ([IMG: ...] 패턴)
+                const imgMatch = line.match(/\[IMG:\s*([^\]]+)\]/i);
+                let contentText = line;
+                let contentImage = null;
+
+                if (imgMatch) {
+                    // 이미지 태그가 있으면 텍스트에서 제거하고 이미지 URL로 간주 (또는 생성 요청)
+                    // 외부 동기화의 경우, 보통 이미지가 생성되어 URL로 오거나 텍스트로 옴
+                    // 여기서는 텍스트를 정리하고 이미지는 null로 둡니다 (이미지 처리는 복잡하므로 텍스트로 보여줌)
+                    // 만약 ST에서 이미지를 <img> 태그로 보낸다면 아래 로직이 필요함:
+                    if (line.includes('<img')) {
+                         const srcMatch = line.match(/src="([^"]+)"/);
+                         if (srcMatch) contentImage = srcMatch[1];
+                         contentText = ''; // 이미지만 표시
+                    }
+                }
+
+                // (2) DB에 저장 (Async await 필수!)
+                const newIdx = await addMessage(contactId, sender, contentText, contentImage);
+
+                // (3) 화면에 말풍선 추가 (폰이 켜져 있을 때만)
+                const isPhoneActive = $('#st-phone-container').hasClass('active');
+                if (isPhoneActive) {
+                    // appendBubble 함수는 messages.js 내부에 있는 함수입니다.
+                    // 이 코드가 return { ... } 안에 있으므로, 내부 함수에 접근하려면 
+                    // 모듈 내부 스코프에서 호출해야 합니다.
+                    // 다행히 이 코드는 모듈 내부이므로 appendBubble을 바로 호출할 수 있습니다.
+                    
+                    // ※ 주의: 위쪽 코드에 appendBubble 함수가 정의되어 있어야 합니다.
+                    // 제가 드린 코드에는 정의되어 있습니다.
+                    
+                    // 약간의 딜레이를 주어 자연스럽게 보이게 함
+                    await new Promise(r => setTimeout(r, 100)); 
+                    appendBubble(sender, contentText, contentImage, newIdx);
+                }
+            }
+
+            // 4. 읽지 않은 메시지 카운트 갱신 (상대방이 보낸 경우만)
             if (sender === 'them') {
-                const unread = (await getUnreadCount(firstContact.id)) + 1;
-                await setUnreadCount(firstContact.id, unread);
+                const unread = (await getUnreadCount(contactId)) + lines.length;
+                await setUnreadCount(contactId, unread);
                 updateMessagesBadge();
             }
         },
+
         updateMessagesBadge,
         addHiddenLog,
         generateTransferReply
