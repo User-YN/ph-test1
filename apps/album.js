@@ -2,61 +2,23 @@ window.STPhone = window.STPhone || {};
 window.STPhone.Apps = window.STPhone.Apps || {};
 
 window.STPhone.Apps.Album = (function () {
-  'use strict';
+    'use strict';
 
-  // ─────────────────────────────────────────────────────────
-  // IndexedDB (idb) 준비: kv 스토어에 JSON 문자열로 저장
-  //   - DB: stPhoneDB
-  //   - Store: kv { k, v }
-  //   - 키: 'st_phone_album_<chatId>'
-  // ─────────────────────────────────────────────────────────
-  const IDB_STATE = {
-    db: null,
-    ready: null,     // Promise
-    loadedKey: null, // 현재 메모리에 로드된 chatId 키
-  };
+    // ==========================================
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
+    // ==========================================
 
-  async function ensureIDB() {
-    if (!IDB_STATE.ready) {
-      IDB_STATE.ready = (async () => {
-        if (!window.idb) {
-          // UMD 폴백 로드 (index.js에서 이미 로드했다면 즉시 통과)
-          await new Promise((resolve, reject) => {
-            const s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/idb@8/build/umd.js';
-            s.async = true;
-            s.onload = resolve;
-            s.onerror = reject;
-            document.head.appendChild(s);
-          });
-        }
-        IDB_STATE.db = await window.idb.openDB('stPhoneDB', 1, {
-          upgrade(db) {
-            if (!db.objectStoreNames.contains('kv')) {
-              db.createObjectStore('kv', { keyPath: 'k' });
-            }
-          },
-        });
-      })();
+    // [Helper] 저장소 인스턴스 가져오기
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Album] window.STPhoneStorage가 초기화되지 않았습니다.');
+        return localforage; 
     }
-    return IDB_STATE.ready;
-  }
 
-  async function idbGet(key) {
-    await ensureIDB();
-    const row = await IDB_STATE.db.get('kv', key);
-    return row ? row.v ?? null : null;
-  }
-
-  async function idbSet(key, value) {
-    await ensureIDB();
-    return IDB_STATE.db.put('kv', { k: key, v: value });
-  }
-
-  // ─────────────────────────────────────────────────────────
-  // CSS/상수/상태
-  // ─────────────────────────────────────────────────────────
-  const css = `
+    // ─────────────────────────────────────────────────────────
+    // CSS/상수/상태
+    // ─────────────────────────────────────────────────────────
+    const css = `
         <style>
             .st-album-app {
                 position: absolute; top: 0; left: 0;
@@ -192,95 +154,105 @@ window.STPhone.Apps.Album = (function () {
         </style>
     `;
 
-  let photos = []; // 메모리 캐시(세션 내 소스오브트루스), IDB와 상호 동기화
-  let isLoading = false;
+    let photos = []; // 메모리 캐시
+    let loadedKey = null; // 현재 로드된 채팅방 키
 
-  function getStorageKey() {
-    const context = window.SillyTavern && window.SillyTavern.getContext
-      ? window.SillyTavern.getContext()
-      : null;
+    function getStorageKey() {
+        const context = window.SillyTavern && window.SillyTavern.getContext
+            ? window.SillyTavern.getContext()
+            : null;
 
-    if (!context || !context.chatId) {
-      return null;
+        if (!context || !context.chatId) {
+            return null;
+        }
+        return 'st_phone_album_' + context.chatId;
     }
-    return 'st_phone_album_' + context.chatId;
-  }
 
-  // 현재 chatId의 앨범을 IDB에서 읽어와 메모리에 병합
-  async function loadForCurrentChat() {
-    const key = getStorageKey();
-    if (!key) {
-      photos = [];
-      IDB_STATE.loadedKey = null;
-      return;
+    // 현재 chatId의 앨범을 저장소에서 읽어와 메모리에 병합
+    async function loadForCurrentChat() {
+        const key = getStorageKey();
+        if (!key) {
+            photos = [];
+            loadedKey = null;
+            return;
+        }
+        if (loadedKey === key) return; // 이미 로드됨
+
+        try {
+            // [수정] 통합 저장소 사용
+            let loaded = await getStorage().getItem(key);
+            
+            // 기존 데이터가 문자열(JSON)로 저장되어 있을 경우 호환성 처리
+            if (typeof loaded === 'string') {
+                try { loaded = JSON.parse(loaded); } catch(e) {}
+            }
+            
+            const loadedArr = Array.isArray(loaded) ? loaded : [];
+
+            // 메모리에 이미 추가된 항목과 병합 (중복 URL 제거)
+            const map = new Map();
+            for (const p of photos) map.set(p.url, p);
+            for (const p of loadedArr) {
+                if (!map.has(p.url)) map.set(p.url, p);
+            }
+            
+            photos = Array.from(map.values());
+            // 상한(50) 유지
+            if (photos.length > 50) photos = photos.slice(0, 50);
+            
+            loadedKey = key;
+        } catch (e) {
+            console.warn('[Album] Failed to load from Storage:', e);
+            photos = [];
+            loadedKey = key;
+        }
     }
-    if (IDB_STATE.loadedKey === key) return; // 이미 로드됨
 
-    isLoading = true;
-    try {
-      const raw = await idbGet(key);
-      const loaded = raw ? JSON.parse(raw) : [];
-      // 메모리에 이미 추가된 항목(예: 로딩 중 addPhoto 호출)과 병합(중복 URL 제거, 최신 우선)
-      const map = new Map();
-      for (const p of photos) map.set(p.url, p);
-      for (const p of loaded) if (!map.has(p.url)) map.set(p.url, p);
-      photos = Array.from(map.values());
-      // 상한(50) 유지
-      if (photos.length > 50) photos = photos.slice(0, 50);
-      IDB_STATE.loadedKey = key;
-    } catch (e) {
-      console.warn('[Album] Failed to load from IndexedDB:', e);
-      photos = [];
-      IDB_STATE.loadedKey = key;
-    } finally {
-      isLoading = false;
+    async function saveToStorage() {
+        const key = getStorageKey();
+        if (!key) return;
+        try {
+            // [수정] 통합 저장소 사용 (JSON.stringify 불필요)
+            await getStorage().setItem(key, photos);
+        } catch (e) {
+            console.warn('[Album] Failed to save to Storage:', e);
+        }
     }
-  }
 
-  async function saveToIDB() {
-    const key = getStorageKey();
-    if (!key) return;
-    try {
-      await idbSet(key, JSON.stringify(photos));
-    } catch (e) {
-      console.warn('[Album] Failed to save to IndexedDB:', e);
-    }
-  }
+    // ─────────────────────────────────────────────────────────
+    // 앨범 UI/동작
+    // ─────────────────────────────────────────────────────────
 
-  // ─────────────────────────────────────────────────────────
-  // 앨범 UI/동작 (기존 인터페이스 유지)
-  // ─────────────────────────────────────────────────────────
+    async function open() {
+        // 현재 채팅의 앨범 로드를 보장
+        await loadForCurrentChat();
 
-  async function open() {
-    // 현재 채팅의 앨범 로드를 보장
-    await loadForCurrentChat();
+        const $screen = window.STPhone.UI.getContentElement();
+        if (!$screen || !$screen.length) return;
+        $screen.empty();
 
-    const $screen = window.STPhone.UI.getContentElement();
-    if (!$screen || !$screen.length) return;
-    $screen.empty();
-
-    let gridContent = '';
-    if (photos.length === 0) {
-      gridContent = `
+        let gridContent = '';
+        if (photos.length === 0) {
+            gridContent = `
                 <div class="st-album-empty">
                     <div class="st-album-empty-icon"><i class="fa-regular fa-image"></i></div>
                     <div>앨범이 비어있습니다</div>
                     <div style="font-size:12px;margin-top:5px;">카메라로 사진을 찍어보세요</div>
                 </div>
             `;
-    } else {
-      photos.forEach((photo, index) => {
-        gridContent += `
+        } else {
+            photos.forEach((photo, index) => {
+                gridContent += `
                     <div class="st-album-thumb" 
                          data-index="${index}" 
                          style="background-image: url('${photo.url}');"
                          title="${photo.prompt || ''}">
                     </div>
                 `;
-      });
-    }
+            });
+        }
 
-    const html = `
+        const html = `
             ${css}
             <div class="st-album-app">
                 <div class="st-album-header">앨범</div>
@@ -290,28 +262,28 @@ window.STPhone.Apps.Album = (function () {
             </div>
         `;
 
-    $screen.append(html);
-    attachListeners();
-  }
+        $screen.append(html);
+        attachListeners();
+    }
 
-  function attachListeners() {
-    $('.st-album-thumb').off('click').on('click', function () {
-      const index = parseInt($(this).data('index'));
-      openViewer(index);
-    });
-  }
+    function attachListeners() {
+        $('.st-album-thumb').off('click').on('click', function () {
+            const index = parseInt($(this).data('index'));
+            openViewer(index);
+        });
+    }
 
-  function openViewer(index) {
-    const photo = photos[index];
-    if (!photo) return;
+    function openViewer(index) {
+        const photo = photos[index];
+        if (!photo) return;
 
-    const date = new Date(photo.timestamp);
-    const dateStr =
-      `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.` +
-      `${String(date.getDate()).padStart(2, '0')} ` +
-      `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        const date = new Date(photo.timestamp);
+        const dateStr =
+            `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.` +
+            `${String(date.getDate()).padStart(2, '0')} ` +
+            `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 
-    const viewerHtml = `
+        const viewerHtml = `
             <div class="st-album-viewer" id="st-album-viewer">
                 <div class="st-album-viewer-header">
                     <div class="st-album-viewer-close" id="st-viewer-close">✕</div>
@@ -325,7 +297,7 @@ window.STPhone.Apps.Album = (function () {
                     </div>
                 </div>
                 <div class="st-album-viewer-image">
-                    ${photo.url}
+                    ${photo.url.startsWith('<img') ? photo.url : `<img src="${photo.url}">`}
                 </div>
                 <div class="st-album-viewer-info">
                     <div class="st-album-viewer-prompt">${photo.prompt || '(설명 없음)'}</div>
@@ -334,93 +306,90 @@ window.STPhone.Apps.Album = (function () {
             </div>
         `;
 
-    $('.st-album-app').append(viewerHtml);
+        $('.st-album-app').append(viewerHtml);
 
-    $('#st-viewer-close').on('click', function () {
-      $('#st-album-viewer').remove();
-    });
+        $('#st-viewer-close').on('click', function () {
+            $('#st-album-viewer').remove();
+        });
 
-    $('#st-viewer-phone-bg').on('click', function () {
-      $('.st-phone-screen').css({
-        background: `url("${photo.url}")`,
-        'background-size': 'cover',
-        'background-position': 'center',
-      });
-      toastr.success('📱 폰 배경화면으로 설정되었습니다!');
-    });
+        $('#st-viewer-phone-bg').on('click', function () {
+            const bgUrl = photo.url.startsWith('<img') ? $(photo.url).attr('src') : photo.url;
+            $('.st-phone-screen').css({
+                background: `url("${bgUrl}")`,
+                'background-size': 'cover',
+                'background-position': 'center',
+            });
+            // 설정에도 저장하려면 Settings.updateSetting 호출 필요 (선택사항)
+            toastr.success('📱 폰 배경화면으로 설정되었습니다!');
+        });
 
-    $('#st-viewer-delete').on('click', function () {
-      if (confirm('이 사진을 삭제하시겠습니까?')) {
-        deletePhoto(index);
-        $('#st-album-viewer').remove();
-        // 현재 화면 갱신
-        open();
-        toastr.info('사진이 삭제되었습니다.');
-      }
-    });
-  }
-
-  // ─────────────────────────────────────────────────────────
-  // 기존 API와 동일한 시그니처 유지
-  //   - addPhoto / deletePhoto: 즉시 메모리 갱신 후 백그라운드 저장
-  // ─────────────────────────────────────────────────────────
-  function addPhoto(photoData) {
-    const key = getStorageKey();
-
-    // 채팅이 바뀐 직후 호출되는 경우를 대비: 로드 예약(비동기) + 메모리 초기화
-    if (IDB_STATE.loadedKey !== key) {
-      IDB_STATE.loadedKey = key;
-      photos = [];
-      // 이전 저장분 읽어와 병합 (백그라운드)
-      loadForCurrentChat().then(() => {
-        // 이미 메모리에 넣은 항목이 있다면 병합되므로 추가 조치 없음
-      }).catch(() => {});
+        $('#st-viewer-delete').on('click', function () {
+            if (confirm('이 사진을 삭제하시겠습니까?')) {
+                deletePhoto(index);
+                $('#st-album-viewer').remove();
+                // 현재 화면 갱신
+                open();
+                toastr.info('사진이 삭제되었습니다.');
+            }
+        });
     }
 
-    // 중복 URL 방지
-    const exists = photos.some((p) => p.url === photoData.url);
-    if (exists) return false;
+    // ─────────────────────────────────────────────────────────
+    // 데이터 조작 API
+    // ─────────────────────────────────────────────────────────
+    function addPhoto(photoData) {
+        const key = getStorageKey();
 
-    photos.unshift(photoData);
+        // 채팅이 바뀐 직후 호출되는 경우를 대비
+        if (loadedKey !== key) {
+            loadedKey = key;
+            photos = [];
+            // 백그라운드에서 로드 시도
+            loadForCurrentChat().catch(() => {});
+        }
 
-    // 상한 유지
-    if (photos.length > 50) {
-      photos = photos.slice(0, 50);
+        // 중복 URL 방지
+        const exists = photos.some((p) => p.url === photoData.url);
+        if (exists) return false;
+
+        photos.unshift(photoData);
+
+        // 상한 유지
+        if (photos.length > 50) {
+            photos = photos.slice(0, 50);
+        }
+
+        // 백그라운드 저장
+        saveToStorage();
+        return true;
     }
 
-    // 백그라운드 저장
-    saveToIDB();
-    return true;
-  }
-
-  function deletePhoto(index) {
-    if (index >= 0 && index < photos.length) {
-      photos.splice(index, 1);
-      saveToIDB(); // 백그라운드 저장
-      return true;
+    function deletePhoto(index) {
+        if (index >= 0 && index < photos.length) {
+            photos.splice(index, 1);
+            saveToStorage(); // 백그라운드 저장
+            return true;
+        }
+        return false;
     }
-    return false;
-  }
 
-  function getPhotoCount() {
-    // 로딩 완료 전 호출될 수 있으나, 세션 내 캐시 기준으로 동작
-    return photos.length;
-  }
-
-  // 모듈 초기화: 현재 컨텍스트 키 기반 로드 시도(비동기)
-  (async () => {
-    try {
-      await loadForCurrentChat();
-    } catch (e) {
-      // 초기 로드 실패해도 앱은 동작(빈 앨범)
-      console.warn('[Album] initial load failed:', e);
+    function getPhotoCount() {
+        return photos.length;
     }
-  })();
 
-  return {
-    open,
-    addPhoto,
-    deletePhoto,
-    getPhotoCount,
-  };
+    // 모듈 초기화: 현재 컨텍스트 키 기반 로드 시도(비동기)
+    (async () => {
+        try {
+            await loadForCurrentChat();
+        } catch (e) {
+            console.warn('[Album] initial load failed:', e);
+        }
+    })();
+
+    return {
+        open,
+        addPhoto,
+        deletePhoto,
+        getPhotoCount,
+    };
 })();

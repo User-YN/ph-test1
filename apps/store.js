@@ -5,53 +5,15 @@ window.STPhone.Apps.Store = (function() {
     'use strict';
 
     // ==========================================
-    // [NEW] IndexedDB Helper
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
     // ==========================================
-    const IDB_NAME = 'STPhone_Data_DB';
-    const IDB_VERSION = 1;
-    const STORE_NAME = 'keyvalue_store';
 
-    const DB = {
-        db: null,
-        init: function() {
-            return new Promise((resolve, reject) => {
-                if (this.db) return resolve(this.db);
-                const request = indexedDB.open(IDB_NAME, IDB_VERSION);
-                request.onupgradeneeded = (e) => {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(STORE_NAME)) {
-                        db.createObjectStore(STORE_NAME);
-                    }
-                };
-                request.onsuccess = (e) => {
-                    this.db = e.target.result;
-                    resolve(this.db);
-                };
-                request.onerror = (e) => {
-                    console.error('[Store] DB Init Error', e);
-                    reject(e);
-                };
-            });
-        },
-        get: async function(key) {
-            await this.init();
-            return new Promise((resolve) => {
-                const tx = this.db.transaction(STORE_NAME, 'readonly');
-                const req = tx.objectStore(STORE_NAME).get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => resolve(null);
-            });
-        },
-        set: async function(key, value) {
-            await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = this.db.transaction(STORE_NAME, 'readwrite');
-                const req = tx.objectStore(STORE_NAME).put(value, key);
-                req.onsuccess = () => resolve();
-                req.onerror = (e) => reject(e);
-            });
-        }
-    };
+    // [Helper] 저장소 인스턴스 가져오기
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Store] window.STPhoneStorage가 초기화되지 않았습니다.');
+        return localforage; 
+    }
 
     const css = `<style> .st-store-app { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 999; display: flex; flex-direction: column; background: var(--pt-bg-color, #f5f5f7); color: var(--pt-text-color, #000); font-family: var(--pt-font, -apple-system, sans-serif); box-sizing: border-box; } .st-store-header { padding: 20px 20px 10px; flex-shrink: 0; } .st-store-title { font-size: 28px; font-weight: 700; margin-bottom: 5px; } .st-store-subtitle { font-size: 14px; color: var(--pt-sub-text, #86868b); } .st-store-tabs { display: flex; padding: 0 20px; gap: 20px; border-bottom: 1px solid var(--pt-border, #e5e5e5); flex-shrink: 0; } .st-store-tab { padding: 14px 0; font-size: 15px; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; color: var(--pt-sub-text, #86868b); transition: all 0.2s; } .st-store-tab.active { color: var(--pt-accent, #007aff); border-bottom-color: var(--pt-accent, #007aff); } .st-store-content { flex: 1; overflow-y: auto; padding: 20px; } .st-store-featured { background: var(--pt-accent, #007aff); border-radius: 16px; padding: 20px; margin-bottom: 20px; color: white; } .st-featured-label { font-size: 12px; opacity: 0.8; margin-bottom: 5px; } .st-featured-title { font-size: 20px; font-weight: 700; margin-bottom: 8px; } .st-featured-desc { font-size: 13px; opacity: 0.9; line-height: 1.4; } .st-store-section { margin-bottom: 25px; } .st-section-header { font-size: 18px; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; } .st-app-list { display: flex; flex-direction: column; gap: 12px; } .st-app-card { display: flex; align-items: center; padding: 14px; background: var(--pt-card-bg, #fff); border-radius: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); } .st-app-card-icon { width: 60px; height: 60px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 28px; margin-right: 12px; flex-shrink: 0; } .st-app-card-info { flex: 1; min-width: 0; } .st-app-card-name { font-size: 16px; font-weight: 600; margin-bottom: 3px; } .st-app-card-category { font-size: 12px; color: var(--pt-sub-text, #86868b); margin-bottom: 4px; } .st-app-card-desc { font-size: 12px; color: var(--pt-sub-text, #86868b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .st-app-card-action { flex-shrink: 0; margin-left: 10px; } .st-install-btn { padding: 8px 18px; border-radius: 20px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; } .st-install-btn.get { background: var(--pt-accent, #007aff); color: white; } .st-install-btn.get:hover { background: #0066d6; } .st-install-btn.installed { background: var(--pt-border, #e5e5e5); color: var(--pt-sub-text, #86868b); } .st-install-btn.open { background: var(--pt-card-bg, #f0f0f0); color: var(--pt-accent, #007aff); border: 1px solid var(--pt-accent, #007aff); } .st-install-btn.uninstall { background: #ff3b30; color: white; } .st-app-detail { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--pt-bg-color, #f5f5f7); z-index: 1001; display: flex; flex-direction: column; } .st-detail-header { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid var(--pt-border, #e5e5e5); flex-shrink: 0; } .st-detail-back { background: none; border: none; color: var(--pt-accent, #007aff); font-size: 24px; cursor: pointer; padding: 5px 10px; } .st-detail-title { flex: 1; text-align: center; font-weight: 600; font-size: 17px; margin-right: 40px; } .st-detail-content { flex: 1; overflow-y: auto; padding: 20px 15px; } .st-detail-hero { display: flex; align-items: flex-start; margin-bottom: 20px; } .st-detail-icon { width: 80px; height: 80px; border-radius: 20px; display: flex; align-items: center; justify-content: center; font-size: 36px; margin-right: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); } .st-detail-meta { flex: 1; } .st-detail-name { font-size: 22px; font-weight: 700; margin-bottom: 4px; } .st-detail-category { font-size: 14px; color: var(--pt-sub-text, #86868b); margin-bottom: 12px; } .st-detail-actions { display: flex; gap: 10px; } .st-detail-btn { padding: 10px 30px; border-radius: 20px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; } .st-detail-btn.primary { background: var(--pt-accent, #007aff); color: white; } .st-detail-btn.danger { background: #ff3b30; color: white; } .st-detail-btn.secondary { background: var(--pt-border, #e5e5e5); color: var(--pt-text-color, #000); } .st-detail-section { margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--pt-border, #e5e5e5); } .st-detail-section-title { font-size: 18px; font-weight: 600; margin-bottom: 10px; } .st-detail-desc { font-size: 15px; line-height: 1.6; color: var(--pt-text-color, #000); } .st-detail-info-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--pt-border, #e5e5e5); } .st-detail-info-label { color: var(--pt-sub-text, #86868b); } .st-detail-info-value { font-weight: 500; } .st-store-empty { text-align: center; padding: 60px 20px; color: var(--pt-sub-text, #86868b); } .st-store-empty-icon { font-size: 64px; margin-bottom: 15px; opacity: 0.5; } .st-store-search { margin: 0 15px 15px; padding: 12px 15px; border-radius: 12px; border: none; background: var(--pt-card-bg, #fff); color: var(--pt-text-color, #000); font-size: 15px; outline: none; width: calc(100% - 30px); box-sizing: border-box; } .st-store-search::placeholder { color: var(--pt-sub-text, #86868b); } </style>`;
 
@@ -91,7 +53,8 @@ window.STPhone.Apps.Store = (function() {
         // 1. 전역 앱 로드
         let globalApps = [];
         try {
-            const globalSaved = await DB.get(getGlobalStorageKey());
+            // [수정됨] window.STPhoneStorage 사용
+            const globalSaved = await getStorage().getItem(getGlobalStorageKey());
             globalApps = globalSaved ? globalSaved : [];
         } catch (e) { globalApps = []; }
 
@@ -100,7 +63,8 @@ window.STPhone.Apps.Store = (function() {
         let chatApps = [];
         if (key) {
             try {
-                const saved = await DB.get(key);
+                // [수정됨] window.STPhoneStorage 사용
+                const saved = await getStorage().getItem(key);
                 chatApps = saved ? saved : [];
             } catch (e) { chatApps = []; }
         }
@@ -116,13 +80,14 @@ window.STPhone.Apps.Store = (function() {
         const globalApps = installedApps.filter(id => GLOBAL_APPS.includes(id));
         const chatApps = installedApps.filter(id => !GLOBAL_APPS.includes(id));
 
+        // [수정됨] window.STPhoneStorage 사용
         // 전역 앱 저장
-        await DB.set(getGlobalStorageKey(), globalApps);
+        await getStorage().setItem(getGlobalStorageKey(), globalApps);
 
         // 채팅별 앱 저장
         const key = getStorageKey();
         if (key) {
-            await DB.set(key, chatApps);
+            await getStorage().setItem(key, chatApps);
         }
     }
 

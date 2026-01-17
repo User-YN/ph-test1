@@ -5,53 +5,15 @@ window.STPhone.Apps.Bank = (function() {
     'use strict';
 
     // ==========================================
-    // [NEW] IndexedDB Helper
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
     // ==========================================
-    const IDB_NAME = 'STPhone_Data_DB';
-    const IDB_VERSION = 1;
-    const STORE_NAME = 'keyvalue_store';
-
-    const DB = {
-        db: null,
-        init: function() {
-            return new Promise((resolve, reject) => {
-                if (this.db) return resolve(this.db);
-                const request = indexedDB.open(IDB_NAME, IDB_VERSION);
-                request.onupgradeneeded = (e) => {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(STORE_NAME)) {
-                        db.createObjectStore(STORE_NAME);
-                    }
-                };
-                request.onsuccess = (e) => {
-                    this.db = e.target.result;
-                    resolve(this.db);
-                };
-                request.onerror = (e) => {
-                    console.error('[Bank] DB Init Error', e);
-                    reject(e);
-                };
-            });
-        },
-        get: async function(key) {
-            await this.init();
-            return new Promise((resolve) => {
-                const tx = this.db.transaction(STORE_NAME, 'readonly');
-                const req = tx.objectStore(STORE_NAME).get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => resolve(null);
-            });
-        },
-        set: async function(key, value) {
-            await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = this.db.transaction(STORE_NAME, 'readwrite');
-                const req = tx.objectStore(STORE_NAME).put(value, key);
-                req.onsuccess = () => resolve();
-                req.onerror = (e) => reject(e);
-            });
-        }
-    };
+    
+    // [Helper] 저장소 인스턴스 가져오기
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Bank] window.STPhoneStorage가 초기화되지 않았습니다.');
+        return localforage; 
+    }
 
     const css = `<style> .st-bank-app { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 999; display: flex; flex-direction: column; background: var(--pt-bg-color, #f5f5f7); color: var(--pt-text-color, #000); font-family: var(--pt-font, -apple-system, sans-serif); box-sizing: border-box; } .st-bank-header { padding: 20px 20px 15px; flex-shrink: 0; border-bottom: 1px solid var(--pt-border, #e5e5e5); background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; } .st-bank-title { font-size: 24px; font-weight: 700; margin-bottom: 3px; } .st-bank-subtitle { font-size: 13px; opacity: 0.8; } .st-bank-balance-card { margin: 20px; padding: 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 20px; color: white; box-shadow: 0 8px 32px rgba(102, 126, 234, 0.3); } .st-bank-balance-label { font-size: 13px; opacity: 0.85; margin-bottom: 8px; } .st-bank-balance-amount { font-size: 32px; font-weight: 700; margin-bottom: 8px; } .st-bank-currency-select { background: rgba(255,255,255,0.2); border: none; color: white; padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; } .st-bank-currency-select option { background: #333; color: white; } .st-bank-quick-menu { display: flex; justify-content: space-around; padding: 15px 20px; background: var(--pt-card-bg, #fff); margin: 0 20px; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); } .st-bank-quick-btn { display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: none; cursor: pointer; color: var(--pt-text-color, #000); } .st-bank-quick-icon { width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 20px; } .st-bank-quick-icon.send { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; } .st-bank-quick-icon.receive { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; } .st-bank-quick-icon.history { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: white; } .st-bank-quick-label { font-size: 12px; font-weight: 500; } .st-bank-tabs { display: flex; padding: 0 20px; margin-top: 20px; gap: 0; border-bottom: 1px solid var(--pt-border, #e5e5e5); } .st-bank-tab { flex: 1; padding: 14px; text-align: center; font-size: 14px; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; color: var(--pt-sub-text, #86868b); transition: all 0.2s; } .st-bank-tab.active { color: var(--pt-accent, #007aff); border-bottom-color: var(--pt-accent, #007aff); } .st-bank-content { flex: 1; overflow-y: auto; padding: 15px 20px; } .st-bank-section { margin-bottom: 20px; } .st-bank-section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; } .st-bank-section-title { font-size: 16px; font-weight: 600; } .st-bank-add-btn { background: var(--pt-accent, #007aff); color: white; border: none; width: 28px; height: 28px; border-radius: 50%; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; } .st-bank-list { display: flex; flex-direction: column; gap: 10px; } .st-bank-item { background: var(--pt-card-bg, #fff); border-radius: 14px; padding: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); } .st-bank-item-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; } .st-bank-item-icon.expense { background: #ffebee; color: #e53935; } .st-bank-item-icon.income { background: #e8f5e9; color: #43a047; } .st-bank-item-icon.transfer { background: #e3f2fd; color: #1e88e5; } .st-bank-item-info { flex: 1; min-width: 0; } .st-bank-item-title { font-size: 15px; font-weight: 600; margin-bottom: 2px; } .st-bank-item-desc { font-size: 12px; color: var(--pt-sub-text, #86868b); } .st-bank-item-amount { font-size: 15px; font-weight: 600; } .st-bank-item-amount.expense { color: #e53935; } .st-bank-item-amount.income { color: #43a047; } .st-bank-item-delete { background: none; border: none; color: #ff3b30; font-size: 14px; cursor: pointer; padding: 5px; opacity: 0.5; transition: opacity 0.2s; } .st-bank-item-delete:hover { opacity: 1; } .st-bank-toggle-section { padding: 14px; background: var(--pt-card-bg, #fff); border-radius: 14px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; } .st-bank-toggle-info { flex: 1; } .st-bank-toggle-label { font-size: 14px; font-weight: 500; } .st-bank-toggle-desc { font-size: 11px; color: var(--pt-sub-text, #86868b); margin-top: 2px; } .st-bank-toggle { position: relative; width: 51px; height: 31px; background: #e9e9eb; border-radius: 15.5px; cursor: pointer; transition: background 0.3s; flex-shrink: 0; } .st-bank-toggle.active { background: var(--pt-accent, #007aff); } .st-bank-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; background: white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: transform 0.3s; } .st-bank-toggle.active::after { transform: translateX(20px); } .st-bank-empty { text-align: center; padding: 40px 20px; color: var(--pt-sub-text, #86868b); } .st-bank-empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; } .st-bank-modal { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1002; } .st-bank-modal-content { background: var(--pt-card-bg, #fff); border-radius: 20px; padding: 24px; width: 300px; max-width: 90%; max-height: 80%; overflow-y: auto; } .st-bank-modal-title { font-size: 18px; font-weight: 600; margin-bottom: 20px; text-align: center; } .st-bank-modal-input { width: 100%; padding: 14px; border: 1px solid var(--pt-border, #e5e5e5); border-radius: 12px; font-size: 15px; margin-bottom: 12px; box-sizing: border-box; background: var(--pt-bg-color, #f5f5f7); color: var(--pt-text-color, #000); } .st-bank-modal-select { width: 100%; padding: 14px; border: 1px solid var(--pt-border, #e5e5e5); border-radius: 12px; font-size: 15px; margin-bottom: 12px; box-sizing: border-box; background: var(--pt-bg-color, #f5f5f7); color: var(--pt-text-color, #000); } .st-bank-modal-row { display: flex; gap: 10px; margin-bottom: 12px; } .st-bank-modal-row .st-bank-modal-input, .st-bank-modal-row .st-bank-modal-select { flex: 1; margin-bottom: 0; } .st-bank-modal-buttons { display: flex; gap: 10px; margin-top: 20px; } .st-bank-modal-btn { flex: 1; padding: 14px; border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; } .st-bank-modal-btn.cancel { background: var(--pt-border, #e5e5e5); color: var(--pt-text-color, #000); } .st-bank-modal-btn.confirm { background: var(--pt-accent, #007aff); color: white; } .st-bank-modal-btn.danger { background: #ff3b30; color: white; } .st-bank-history-item { background: var(--pt-card-bg, #fff); border-radius: 14px; padding: 14px; display: flex; align-items: center; gap: 12px; margin-bottom: 10px; } .st-bank-history-icon { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; } .st-bank-history-icon.in { background: #e8f5e9; color: #43a047; } .st-bank-history-icon.out { background: #ffebee; color: #e53935; } .st-bank-history-info { flex: 1; } .st-bank-history-title { font-size: 14px; font-weight: 600; } .st-bank-history-date { font-size: 11px; color: var(--pt-sub-text, #86868b); } .st-bank-history-amount { font-size: 15px; font-weight: 600; } .st-bank-history-amount.in { color: #43a047; } .st-bank-history-amount.out { color: #e53935; } .st-bank-pending-item { background: linear-gradient(135deg, #fff9c4 0%, #fff59d 100%); border-radius: 14px; padding: 14px; margin-bottom: 10px; } .st-bank-pending-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; } .st-bank-pending-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; } .st-bank-pending-info { flex: 1; } .st-bank-pending-name { font-size: 14px; font-weight: 600; color: #333; } .st-bank-pending-desc { font-size: 12px; color: #666; } .st-bank-pending-amount { font-size: 18px; font-weight: 700; color: #43a047; } .st-bank-pending-actions { display: flex; gap: 8px; } .st-bank-pending-btn { flex: 1; padding: 10px; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; } .st-bank-pending-btn.accept { background: #43a047; color: white; } .st-bank-pending-btn.decline { background: #e53935; color: white; } .st-bank-contact-list { max-height: 200px; overflow-y: auto; border: 1px solid var(--pt-border, #e5e5e5); border-radius: 12px; margin-bottom: 12px; } .st-bank-contact-item { display: flex; align-items: center; padding: 12px; border-bottom: 1px solid var(--pt-border, #e5e5e5); cursor: pointer; transition: background 0.2s; } .st-bank-contact-item:last-child { border-bottom: none; } .st-bank-contact-item:hover { background: rgba(0,0,0,0.03); } .st-bank-contact-item.selected { background: rgba(0, 122, 255, 0.1); } .st-bank-contact-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; margin-right: 10px; } .st-bank-contact-name { flex: 1; font-size: 15px; } .st-bank-contact-check { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--pt-border, #ccc); display: flex; align-items: center; justify-content: center; font-size: 12px; color: white; } .st-bank-contact-item.selected .st-bank-contact-check { background: var(--pt-accent, #007aff); border-color: var(--pt-accent, #007aff); } </style>`;
 
@@ -85,7 +47,8 @@ window.STPhone.Apps.Bank = (function() {
         const key = getStorageKey();
         if (!key) { resetData(); return; }
         try {
-            const data = await DB.get(key);
+            // [수정됨] 통합 저장소 사용
+            const data = await getStorage().getItem(key);
             if (data) {
                 balance = data.balance || 0;
                 currency = data.currency || 'KRW';
@@ -105,7 +68,8 @@ window.STPhone.Apps.Bank = (function() {
         const key = getStorageKey();
         if (!key) return;
         try {
-            await DB.set(key, {
+            // [수정됨] 통합 저장소 사용
+            await getStorage().setItem(key, {
                 balance,
                 currency,
                 recurringExpenses,

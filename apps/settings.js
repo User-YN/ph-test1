@@ -5,63 +5,10 @@ window.STPhone.Apps.Settings = (function() {
     'use strict';
 
     // ==========================================
-    // [NEW] IndexedDB Helper (공용 DB 사용)
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
     // ==========================================
-    const IDB_NAME = 'STPhone_Data_DB';
-    const IDB_VERSION = 1;
-    const STORE_NAME = 'keyvalue_store';
-
-    const DB = {
-        db: null,
-        init: function() {
-            return new Promise((resolve, reject) => {
-                if (this.db) return resolve(this.db);
-                const request = indexedDB.open(IDB_NAME, IDB_VERSION);
-                request.onupgradeneeded = (e) => {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(STORE_NAME)) {
-                        db.createObjectStore(STORE_NAME);
-                    }
-                };
-                request.onsuccess = (e) => {
-                    this.db = e.target.result;
-                    resolve(this.db);
-                };
-                request.onerror = (e) => {
-                    console.error('[Settings] DB Init Error', e);
-                    reject(e);
-                };
-            });
-        },
-        get: async function(key) {
-            await this.init();
-            return new Promise((resolve) => {
-                const tx = this.db.transaction(STORE_NAME, 'readonly');
-                const req = tx.objectStore(STORE_NAME).get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => resolve(null);
-            });
-        },
-        set: async function(key, value) {
-            await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = this.db.transaction(STORE_NAME, 'readwrite');
-                const req = tx.objectStore(STORE_NAME).put(value, key);
-                req.onsuccess = () => resolve();
-                req.onerror = (e) => reject(e);
-            });
-        },
-        del: async function(key) {
-            await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = this.db.transaction(STORE_NAME, 'readwrite');
-                const req = tx.objectStore(STORE_NAME).delete(key);
-                req.onsuccess = () => resolve();
-                req.onerror = (e) => reject(e);
-            });
-        }
-    };
-
+    // index.js에서 생성한 window.STPhoneStorage를 사용합니다.
+    
     const defaultSettings = {
         maxContextTokens: 4096,
         connectionProfileId: '',
@@ -127,6 +74,14 @@ window.STPhone.Apps.Settings = (function() {
 
     let currentSettings = { ...defaultSettings };
 
+    // [Helper] 저장소 인스턴스 가져오기 (없으면 경고)
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Settings] window.STPhoneStorage가 초기화되지 않았습니다. index.js를 확인하세요.');
+        // 비상용 폴백 (하지만 index.js가 올바르다면 실행될 일 없음)
+        return localforage; 
+    }
+
     function getStorageKey() {
         const context = window.SillyTavern?.getContext ? window.SillyTavern.getContext() : null;
         if (!context || !context.chatId) return null;
@@ -140,7 +95,7 @@ window.STPhone.Apps.Settings = (function() {
     // [Async]
     async function loadGlobalSettings() {
         try {
-            const saved = await DB.get(getGlobalStorageKey());
+            const saved = await getStorage().getItem(getGlobalStorageKey());
             return saved ? saved : null;
         } catch (e) { return null; }
     }
@@ -148,7 +103,7 @@ window.STPhone.Apps.Settings = (function() {
     // [Async]
     async function saveGlobalSettings() {
         try {
-            await DB.set(getGlobalStorageKey(), currentSettings);
+            await getStorage().setItem(getGlobalStorageKey(), currentSettings);
         } catch (e) { console.error('[Settings] 전역 설정 저장 실패:', e); }
     }
 
@@ -162,14 +117,14 @@ window.STPhone.Apps.Settings = (function() {
                 userAvatar: currentSettings.userAvatar,
                 profileGlobal: true
             };
-            await DB.set('st_phone_global_profile', profileData);
+            await getStorage().setItem('st_phone_global_profile', profileData);
         } catch (e) { console.error('[Settings] 프로필 전역 저장 실패:', e); }
     }
 
     // [Async]
     async function loadProfileGlobal() {
         try {
-            const saved = await DB.get('st_phone_global_profile');
+            const saved = await getStorage().getItem('st_phone_global_profile');
             return saved ? saved : null;
         } catch (e) { return null; }
     }
@@ -228,7 +183,7 @@ window.STPhone.Apps.Settings = (function() {
             return;
         }
 
-        const saved = await DB.get(key);
+        const saved = await getStorage().getItem(key);
         if (saved) {
             currentSettings = { ...defaultSettings, ...saved };
         } else if (globalSettings && globalSettings.persistSettings) {
@@ -248,7 +203,7 @@ window.STPhone.Apps.Settings = (function() {
         }
     }
 
-    // [Async] 데이터 마이그레이션 (IndexedDB 기반)
+    // [Async] 데이터 마이그레이션 (window.STPhoneStorage 기반)
     async function migrateDataToCharacterBased() {
         const context = window.SillyTavern?.getContext?.();
         if (!context?.chatId || context.characterId === undefined) {
@@ -262,16 +217,16 @@ window.STPhone.Apps.Settings = (function() {
         // 메시지
         const msgKey = 'st_phone_messages_' + chatId;
         const msgCharKey = 'st_phone_messages_char_' + charId;
-        const existingMsgs = await DB.get(msgKey);
+        const existingMsgs = await getStorage().getItem(msgKey);
         if (existingMsgs) {
             try {
-                const charData = (await DB.get(msgCharKey)) || {};
+                const charData = (await getStorage().getItem(msgCharKey)) || {};
                 for (const contactId in existingMsgs) {
                     if (!charData[contactId] || charData[contactId].length === 0) {
                         charData[contactId] = existingMsgs[contactId];
                     }
                 }
-                await DB.set(msgCharKey, charData);
+                await getStorage().setItem(msgCharKey, charData);
                 console.log('📱 [Settings] 메시지 데이터 마이그레이션 완료');
             } catch (e) { console.error('메시지 마이그레이션 실패:', e); }
         }
@@ -279,16 +234,16 @@ window.STPhone.Apps.Settings = (function() {
         // 그룹
         const groupKey = 'st_phone_groups_' + chatId;
         const groupCharKey = 'st_phone_groups_char_' + charId;
-        const existingGroups = await DB.get(groupKey);
+        const existingGroups = await getStorage().getItem(groupKey);
         if (existingGroups) {
             try {
-                const charData = (await DB.get(groupCharKey)) || []; // 그룹은 배열
+                const charData = (await getStorage().getItem(groupCharKey)) || []; // 그룹은 배열
                 existingGroups.forEach(g => {
                     if (!charData.find(cg => cg.id === g.id)) {
                         charData.push(g);
                     }
                 });
-                await DB.set(groupCharKey, charData);
+                await getStorage().setItem(groupCharKey, charData);
                 console.log('📱 [Settings] 그룹 데이터 마이그레이션 완료');
             } catch (e) { console.error('그룹 마이그레이션 실패:', e); }
         }
@@ -296,17 +251,17 @@ window.STPhone.Apps.Settings = (function() {
         // 전화
         const callKey = 'st_phone_calls_' + chatId;
         const callCharKey = 'st_phone_calls_char_' + charId;
-        const existingCalls = await DB.get(callKey);
+        const existingCalls = await getStorage().getItem(callKey);
         if (existingCalls) {
             try {
-                const charCalls = (await DB.get(callCharKey)) || [];
+                const charCalls = (await getStorage().getItem(callCharKey)) || [];
                 existingCalls.forEach(call => {
                     if (!charCalls.find(c => c.timestamp === call.timestamp)) {
                         charCalls.push(call);
                     }
                 });
                 charCalls.sort((a, b) => b.timestamp - a.timestamp);
-                await DB.set(callCharKey, charCalls);
+                await getStorage().setItem(callCharKey, charCalls);
                 console.log('📱 [Settings] 전화 기록 마이그레이션 완료');
             } catch (e) { console.error('전화 마이그레이션 실패:', e); }
         }
@@ -318,7 +273,7 @@ window.STPhone.Apps.Settings = (function() {
     async function saveToStorage() {
         const key = getStorageKey();
         if (key) {
-            await DB.set(key, currentSettings);
+            await getStorage().setItem(key, currentSettings);
         }
 
         if (currentSettings.persistSettings) {
@@ -328,7 +283,8 @@ window.STPhone.Apps.Settings = (function() {
         if (currentSettings.profileGlobal) {
             await saveProfileGlobal();
         } else {
-            await DB.del('st_phone_global_profile');
+            // 삭제도 비동기로 처리
+            await getStorage().removeItem('st_phone_global_profile');
         }
 
         // 즉시 반영
@@ -342,13 +298,13 @@ window.STPhone.Apps.Settings = (function() {
     }
 
     // 동기식 Getter (캐시된 값 반환)
+    // [중요] 이 함수는 processSync 등에서 동기적으로 호출되므로
+    // 반드시 메모리에 로드된 currentSettings를 즉시 반환해야 함.
     function getSettings() {
-        // init() 또는 chat changed 이벤트에서 loadFromStorage가 호출되어 currentSettings가 최신화되어 있다고 가정
         return currentSettings;
     }
 
     function getPromptDepth(promptKey) {
-        // currentSettings는 loadFromStorage에 의해 업데이트됨
         const depths = currentSettings.promptDepth || defaultSettings.promptDepth;
         return depths[promptKey] || 0;
     }
@@ -911,7 +867,7 @@ window.STPhone.Apps.Settings = (function() {
         $('#st-set-profile-global').on('change', async function() {
             currentSettings.profileGlobal = $(this).is(':checked');
             if (currentSettings.profileGlobal) { await saveToStorage(); await saveProfileGlobal(); toastr.success('🔒 프로필이 전역 저장됩니다'); }
-            else { await DB.del('st_phone_global_profile'); await saveToStorage(); toastr.info('🔓 프로필 전역 저장이 해제되었습니다'); }
+            else { await getStorage().removeItem('st_phone_global_profile'); await saveToStorage(); toastr.info('🔓 프로필 전역 저장이 해제되었습니다'); }
         });
         $('#st-set-sync').on('change', function() { currentSettings.chatToSms = $(this).is(':checked'); saveToStorage(); });
         $('#st-set-prefill').on('input', function() { currentSettings.prefill = $(this).val(); saveToStorage(); });

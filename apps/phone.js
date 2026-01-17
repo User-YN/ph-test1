@@ -5,61 +5,24 @@ window.STPhone.Apps.Phone = (function() {
     'use strict';
 
     // ==========================================
-    // [NEW] IndexedDB Helper (Messages 앱과 동일한 DB 사용)
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
     // ==========================================
-    const IDB_NAME = 'STPhone_Data_DB';
-    const IDB_VERSION = 1;
-    const STORE_NAME = 'keyvalue_store';
-
-    const DB = {
-        db: null,
-        init: function() {
-            return new Promise((resolve, reject) => {
-                if (this.db) return resolve(this.db);
-                const request = indexedDB.open(IDB_NAME, IDB_VERSION);
-                request.onupgradeneeded = (e) => {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(STORE_NAME)) {
-                        db.createObjectStore(STORE_NAME);
-                    }
-                };
-                request.onsuccess = (e) => {
-                    this.db = e.target.result;
-                    resolve(this.db);
-                };
-                request.onerror = (e) => {
-                    console.error('[Phone] DB Init Error', e);
-                    reject(e);
-                };
-            });
-        },
-        get: async function(key) {
-            await this.init();
-            return new Promise((resolve) => {
-                const tx = this.db.transaction(STORE_NAME, 'readonly');
-                const req = tx.objectStore(STORE_NAME).get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => resolve(null);
-            });
-        },
-        set: async function(key, value) {
-            await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = this.db.transaction(STORE_NAME, 'readwrite');
-                const req = tx.objectStore(STORE_NAME).put(value, key);
-                req.onsuccess = () => resolve();
-                req.onerror = (e) => reject(e);
-            });
-        }
-    };
+    
+    // [Helper] 저장소 인스턴스 가져오기
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Phone] window.STPhoneStorage가 초기화되지 않았습니다.');
+        return localforage; 
+    }
 
     // ========== Helper: 유저 설정 비동기 로드 ==========
     async function getUserConfig(chatId) {
         if (!chatId) return {};
         try {
-            // 기존 localStorage 키 패턴을 DB 키로 가정
-            const config = (await DB.get('st_phone_config_' + chatId)) || {};
-            // 만약 DB에 없고 localStorage에만 있다면 마이그레이션(선택사항)
+            // [수정됨] 통합 저장소에서 설정 로드
+            const config = (await getStorage().getItem('st_phone_config_' + chatId)) || {};
+            
+            // 만약 DB에 없고 localStorage에만 있다면 (구버전 호환)
             if (Object.keys(config).length === 0) {
                 const local = localStorage.getItem('st_phone_config_' + chatId);
                 if (local) return JSON.parse(local);
@@ -92,10 +55,9 @@ window.STPhone.Apps.Phone = (function() {
     }
 
     async function generateWithProfile(prompt, maxTokens = 1024) {
+        // Settings.getSettings()는 이제 동기 함수이므로 바로 호출 가능
         const settings = window.STPhone.Apps?.Settings?.getSettings?.() || {};
         const profileId = settings.connectionProfileId;
-        const debugId = Date.now();
-        const startedAt = performance?.now?.() || 0;
 
         try {
             const context = window.SillyTavern?.getContext?.();
@@ -159,7 +121,8 @@ window.STPhone.Apps.Phone = (function() {
         const key = getStorageKey();
         if (!key) { callHistory = []; return; }
         try {
-            callHistory = (await DB.get(key)) || [];
+            // [수정됨] window.STPhoneStorage 사용
+            callHistory = (await getStorage().getItem(key)) || [];
         } catch (e) { callHistory = []; }
     }
 
@@ -167,7 +130,8 @@ window.STPhone.Apps.Phone = (function() {
     async function saveHistory() {
         const key = getStorageKey();
         if (!key) return;
-        await DB.set(key, callHistory);
+        // [수정됨] window.STPhoneStorage 사용
+        await getStorage().setItem(key, callHistory);
     }
 
     // [Async]
@@ -912,9 +876,10 @@ window.STPhone.Apps.Phone = (function() {
             } else {
                 const messagesKey = `st_phone_msgs_${ctx.chatId}_${contact.id}`;
                 try {
-                    const msgs = (await DB.get(messagesKey)) || [];
+                    // [수정됨] window.STPhoneStorage 사용
+                    const msgs = (await getStorage().getItem(messagesKey)) || [];
                     msgs.push({ sender: 'them', text: replyText, timestamp: Date.now(), image: null });
-                    await DB.set(messagesKey, msgs);
+                    await getStorage().setItem(messagesKey, msgs);
                     addHiddenLog(contact.name, `[📩 ${contact.name} -> ${userName}]: ${replyText}`);
                     if (typeof toastr !== 'undefined') toastr.info(`${contact.name}: ${replyText}`, '새 문자');
                 } catch (e) { console.error('[Phone] 문자 저장 실패:', e); }

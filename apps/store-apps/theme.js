@@ -4,7 +4,18 @@ window.STPhone.Apps = window.STPhone.Apps || {};
 window.STPhone.Apps.Theme = (function() {
     'use strict';
 
-    const STORAGE_KEY = 'st_phone_theme_settings';
+    // ==========================================
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
+    // ==========================================
+    const LEGACY_STORAGE_KEY = 'st_phone_theme_settings'; // 구버전 마이그레이션용
+    const THEME_STORAGE_KEY = 'st_phone_theme_current';   // 신규 저장 키
+
+    // [Helper] 저장소 인스턴스 가져오기
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Theme] window.STPhoneStorage가 초기화되지 않았습니다.');
+        return localforage; 
+    }
 
     // 기본 테마 설정
     const DEFAULT_THEME = {
@@ -101,85 +112,13 @@ window.STPhone.Apps.Theme = (function() {
     let currentTheme = null;
     let currentEditSection = 'frame';
 
-    // ===== IndexedDB 설정 (대용량 이미지 처리를 위해 별도 DB 사용 권장) =====
-    const DB_NAME = 'STPhoneThemeDB';
-    const DB_VERSION = 1;
-    const STORE_NAME = 'themes';
-    let db = null;
-
-    function openDB() {
-        return new Promise((resolve, reject) => {
-            if (db) { resolve(db); return; }
-            const request = indexedDB.open(DB_NAME, DB_VERSION);
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                db = request.result;
-                resolve(db);
-            };
-            request.onupgradeneeded = (e) => {
-                const database = e.target.result;
-                if (!database.objectStoreNames.contains(STORE_NAME)) {
-                    database.createObjectStore(STORE_NAME, { keyPath: 'id' });
-                }
-            };
-        });
-    }
-
-    // [Async]
-    async function saveToIndexedDB(data) {
-        try {
-            const database = await openDB();
-            return new Promise((resolve, reject) => {
-                const tx = database.transaction(STORE_NAME, 'readwrite');
-                const store = tx.objectStore(STORE_NAME);
-                // 'current'라는 ID로 테마 전체 저장
-                const request = store.put({ id: 'current', data: data });
-                tx.oncomplete = () => {
-                    // console.log('🎨 [Theme] Saved to IndexedDB');
-                    resolve(true);
-                };
-                tx.onerror = (e) => {
-                    console.error('🎨 [Theme] IndexedDB tx error:', e);
-                    reject(tx.error);
-                };
-                request.onerror = (e) => reject(request.error);
-            });
-        } catch (e) {
-            console.error('🎨 [Theme] saveToIndexedDB error:', e);
-            throw e;
-        }
-    }
-
-    // [Async]
-    async function loadFromIndexedDB() {
-        try {
-            const database = await openDB();
-            return new Promise((resolve) => {
-                const tx = database.transaction(STORE_NAME, 'readonly');
-                const store = tx.objectStore(STORE_NAME);
-                const request = store.get('current');
-                request.onsuccess = () => {
-                    const result = request.result?.data || null;
-                    if (result) console.log('🎨 [Theme] Loaded from IndexedDB');
-                    resolve(result);
-                };
-                request.onerror = () => resolve(null);
-            });
-        } catch (e) {
-            console.error('🎨 [Theme] loadFromIndexedDB error:', e);
-            return null;
-        }
-    }
-
     // [Async]
     async function init() {
         // 테마 앱이 설치되어 있을 때만 테마 로드
-        // (주의: 전역 앱 목록은 동기적으로 가져올 수 있는 localStorage나 다른 방법을 확인해야 함.
-        //  여기서는 기존 로직대로 localStorage에서 확인)
         try {
-            const globalApps = JSON.parse(localStorage.getItem('st_phone_global_installed_apps') || '[]');
-            if (!globalApps.includes('theme')) {
-                // console.log('🎨 [Theme] App not installed');
+            // store.js에서 관리하는 전역 설치 앱 목록 확인 (DB에서 확인)
+            const globalApps = await getStorage().getItem('st_phone_global_installed_apps');
+            if (Array.isArray(globalApps) && !globalApps.includes('theme')) {
                 return;
             }
         } catch (e) {}
@@ -192,18 +131,18 @@ window.STPhone.Apps.Theme = (function() {
     // [Async]
     async function loadTheme() {
         try {
-            // 1. IndexedDB 시도
-            let saved = await loadFromIndexedDB();
+            // 1. 통합 저장소(IndexedDB) 시도
+            let saved = await getStorage().getItem(THEME_STORAGE_KEY);
 
-            // 2. 없으면 localStorage (마이그레이션)
+            // 2. 없으면 localStorage (Legacy 마이그레이션)
             if (!saved) {
-                const legacySaved = localStorage.getItem(STORAGE_KEY);
+                const legacySaved = localStorage.getItem(LEGACY_STORAGE_KEY);
                 if (legacySaved) {
                     try {
                         saved = JSON.parse(legacySaved);
                         // 마이그레이션 후 저장
-                        await saveToIndexedDB(saved);
-                        localStorage.removeItem(STORAGE_KEY);
+                        await getStorage().setItem(THEME_STORAGE_KEY, saved);
+                        localStorage.removeItem(LEGACY_STORAGE_KEY);
                         console.log('🎨 [Theme] Migrated to IndexedDB');
                     } catch (e) { console.error('Migration failed', e); }
                 }
@@ -234,7 +173,8 @@ window.STPhone.Apps.Theme = (function() {
                 currentTheme = themeToSave; // 압축된 버전으로 업데이트
             }
 
-            await saveToIndexedDB(themeToSave);
+            // [수정] 통합 저장소에 저장
+            await getStorage().setItem(THEME_STORAGE_KEY, themeToSave);
             return true;
         } catch (e) {
             console.error('Theme save error:', e);
@@ -576,11 +516,9 @@ window.STPhone.Apps.Theme = (function() {
 
     async function clearTheme() {
         try {
-            const database = await openDB();
-            const tx = database.transaction(STORE_NAME, 'readwrite');
-            tx.objectStore(STORE_NAME).delete('current');
-        } catch (e) { console.log('IndexedDB clear failed:', e); }
-        localStorage.removeItem(STORAGE_KEY);
+            await getStorage().removeItem(THEME_STORAGE_KEY);
+        } catch (e) { console.log('Storage clear failed:', e); }
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
         currentTheme = null;
         const $container = $('#st-phone-container');
         if ($container.length) {

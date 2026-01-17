@@ -5,53 +5,15 @@ window.STPhone.Apps.Streaming = (function() {
     'use strict';
 
     // ==========================================
-    // [NEW] IndexedDB Helper
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
     // ==========================================
-    const IDB_NAME = 'STPhone_Data_DB';
-    const IDB_VERSION = 1;
-    const STORE_NAME = 'keyvalue_store';
-
-    const DB = {
-        db: null,
-        init: function() {
-            return new Promise((resolve, reject) => {
-                if (this.db) return resolve(this.db);
-                const request = indexedDB.open(IDB_NAME, IDB_VERSION);
-                request.onupgradeneeded = (e) => {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(STORE_NAME)) {
-                        db.createObjectStore(STORE_NAME);
-                    }
-                };
-                request.onsuccess = (e) => {
-                    this.db = e.target.result;
-                    resolve(this.db);
-                };
-                request.onerror = (e) => {
-                    console.error('[Streaming] DB Init Error', e);
-                    reject(e);
-                };
-            });
-        },
-        get: async function(key) {
-            await this.init();
-            return new Promise((resolve) => {
-                const tx = this.db.transaction(STORE_NAME, 'readonly');
-                const req = tx.objectStore(STORE_NAME).get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => resolve(null);
-            });
-        },
-        set: async function(key, value) {
-            await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = this.db.transaction(STORE_NAME, 'readwrite');
-                const req = tx.objectStore(STORE_NAME).put(value, key);
-                req.onsuccess = () => resolve();
-                req.onerror = (e) => reject(e);
-            });
-        }
-    };
+    
+    // [Helper] 저장소 인스턴스 가져오기
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Streaming] window.STPhoneStorage가 초기화되지 않았습니다.');
+        return localforage; 
+    }
 
     // ========== AI Generation Helper ==========
     function getSlashCommandParser() {
@@ -77,8 +39,6 @@ window.STPhone.Apps.Streaming = (function() {
     async function generateWithProfile(promptOrMessages, maxTokens = 2048) {
         const settings = window.STPhone.Apps?.Settings?.getSettings?.() || {};
         const profileId = settings.connectionProfileId;
-        const debugId = Date.now();
-        const startedAt = performance?.now?.() || 0;
 
         const messages = Array.isArray(promptOrMessages)
             ? promptOrMessages
@@ -153,7 +113,8 @@ window.STPhone.Apps.Streaming = (function() {
         const key = getStorageKey();
         if (!key) { resetData(); return; }
         try {
-            const saved = await DB.get(key);
+            // [수정] 통합 저장소 사용
+            const saved = await getStorage().getItem(key);
             if (saved) {
                 streamHistory = saved.streamHistory || [];
                 totalEarnings = saved.totalEarnings || 0;
@@ -169,7 +130,8 @@ window.STPhone.Apps.Streaming = (function() {
         const key = getStorageKey();
         if (!key) return;
         try {
-            await DB.set(key, { streamHistory, totalEarnings, followerCount });
+            // [수정] 통합 저장소 사용
+            await getStorage().setItem(key, { streamHistory, totalEarnings, followerCount });
         } catch (e) { console.error('[Streaming] Save failed:', e); }
     }
 
@@ -340,7 +302,7 @@ window.STPhone.Apps.Streaming = (function() {
                 streamData.earnings = (streamData.earnings || 0) + chat.amount;
                 const Bank = window.STPhone?.Apps?.Bank;
                 if (Bank && typeof Bank.addBalance === 'function') {
-                    // [Async] Bank.addBalance is async now, await recommended but optional if we assume eventual consistency
+                    // [Async] Bank.addBalance is async now
                     Bank.addBalance(chat.amount, `${chat.username}님 Fling 후원`);
                 }
                 logBuffer.push(`[📺 FLING DONATION] ${chat.username}님이 ${chat.amount}원을 후원하며 메시지를 보냈습니다: "${chat.message || '후원 감사합니다!'}"`);

@@ -187,6 +187,7 @@ window.STPhone.Apps.Camera = (function() {
         }
 
         try {
+            // Settings와 Contacts는 이미 수정된 버전에서 동기식 getter를 제공하므로 안전함
             const settings = window.STPhone.Apps?.Settings?.getSettings?.() || {};
             const userName = settings.userName || 'User';
             const userTags = settings.userTags || '';
@@ -346,6 +347,7 @@ Example output format:
         });
 
         $('#st-save-album').off('click').on('click', function() {
+            // Album.addPhoto는 이제 동기식으로 호출 가능 (백그라운드 저장)
             if (lastImageUrl && window.STPhone.Apps && window.STPhone.Apps.Album) {
                 window.STPhone.Apps.Album.addPhoto({
                     url: lastImageUrl,
@@ -365,6 +367,10 @@ Example output format:
                     'background-size': 'cover',
                     'background-position': 'center'
                 });
+                // 설정 저장(선택사항)
+                if (window.STPhone.Apps?.Settings?.updateSetting) {
+                    window.STPhone.Apps.Settings.updateSetting('wallpaper', `url("${lastImageUrl}")`);
+                }
                 toastr.success("📱 폰 배경화면으로 설정되었습니다!");
             }
         });

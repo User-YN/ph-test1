@@ -4,55 +4,15 @@ window.STPhone.Apps = window.STPhone.Apps || {};
 window.STPhone.Apps.Contacts = (function () {
     'use strict';
 
-    // ─────────────────────────────────────────────────────────
-    // IndexedDB(idb) 준비: kv 스토어에 JSON/문자열 저장
-    //   - DB: stPhoneDB
-    //   - Store: kv { k, v }
-    //   - 키:
-    //       st_phone_contacts_<chatId>          (채팅별 연락처 배열 JSON)
-    //       st_phone_contacts_char_<charId>     (캐릭터별 연락처 배열 JSON)
-    //       st_phone_bot_tags_<charId>          (봇 외모 태그 문자열)
-    // ─────────────────────────────────────────────────────────
-    const IDB_STATE = {
-        db: null,
-        ready: null,
-        loadedKey: null, // 현재 메모리에 로드된 chatId 키
-    };
-
-    async function ensureIDB() {
-        if (!IDB_STATE.ready) {
-            IDB_STATE.ready = (async () => {
-                if (!window.idb) {
-                    await new Promise((resolve, reject) => {
-                        const s = document.createElement('script');
-                        s.src = 'https://cdn.jsdelivr.net/npm/idb@8/build/umd.js';
-                        s.async = true;
-                        s.onload = resolve;
-                        s.onerror = reject;
-                        document.head.appendChild(s);
-                    });
-                }
-                IDB_STATE.db = await window.idb.openDB('stPhoneDB', 1, {
-                    upgrade(db) {
-                        if (!db.objectStoreNames.contains('kv')) {
-                            db.createObjectStore('kv', { keyPath: 'k' });
-                        }
-                    },
-                });
-            })();
-        }
-        return IDB_STATE.ready;
-    }
-
-    async function idbGet(key) {
-        await ensureIDB();
-        const row = await IDB_STATE.db.get('kv', key);
-        return row ? (row.v ?? null) : null;
-    }
-
-    async function idbSet(key, value) {
-        await ensureIDB();
-        return IDB_STATE.db.put('kv', { k: key, v: value });
+    // ==========================================
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
+    // ==========================================
+    
+    // [Helper] 저장소 인스턴스 가져오기
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Contacts] window.STPhoneStorage가 초기화되지 않았습니다.');
+        return localforage; 
     }
 
     // ─────────────────────────────────────────────────────────
@@ -260,6 +220,7 @@ window.STPhone.Apps.Contacts = (function () {
     `;
 
     let contacts = [];
+    let loadedKey = null; // 현재 로드된 채팅방 키
     const DEFAULT_AVATAR = 'https://upload.wikimedia.org/wikipedia/commons/7/7c/Profile_avatar_placeholder_large.png';
 
     // 특수 ID: 봇을 위한 고정 ID (유저는 설정의 프로필에서 관리)
@@ -324,57 +285,34 @@ window.STPhone.Apps.Contacts = (function () {
         }
     }
 
-    // 유저(페르소나) 정보 가져오기
-    async function getUserInfo() {
-        const ctx = window.SillyTavern?.getContext?.();
-        if (!ctx) return null;
-
-        try {
-            const name = await resolveMacro('{{user}}');
-            const persona = await resolveMacro('{{persona}}');
-
-            // 유저 아바타 가져오기
-            let avatar = '';
-            if (ctx.user_avatar) {
-                avatar = `/User Avatars/${ctx.user_avatar}`;
-            }
-
-            return { name, persona, avatar };
-        } catch (e) {
-            console.error('[Contacts] 유저 정보 가져오기 실패:', e);
-            return null;
-        }
-    }
-
     // ─────────────────────────────────────────────────────────
-    // IDB 로드/저장 & 캐릭터별 병합
+    // 저장소 로드/저장 & 캐릭터별 병합 (수정됨)
     // ─────────────────────────────────────────────────────────
-    async function loadFromIDBForCurrentChat() {
+    async function loadContactsFromStorage() {
         const key = getStorageKey();
         if (!key) {
             contacts = [];
-            IDB_STATE.loadedKey = null;
+            loadedKey = null;
             return;
         }
-        // 채팅별 연락처 로드
+        
         let changed = false;
         try {
-            const raw = await idbGet(key);
-            const loaded = raw ? JSON.parse(raw) : [];
+            // [수정] 통합 저장소에서 채팅별 연락처 로드
+            const loaded = await getStorage().getItem(key);
             contacts = Array.isArray(loaded) ? loaded : [];
-            IDB_STATE.loadedKey = key;
+            loadedKey = key;
         } catch (e) {
-            console.warn('[Contacts] IndexedDB 로드 실패:', e);
+            console.warn('[Contacts] 저장소 로드 실패:', e);
             contacts = [];
-            IDB_STATE.loadedKey = key;
+            loadedKey = key;
         }
 
         // 캐릭터별 연락처 병합 (persistForChar만)
         try {
             const charKey = getCharacterStorageKey();
             if (charKey) {
-                const rawChar = await idbGet(charKey);
-                const charContacts = rawChar ? JSON.parse(rawChar) : [];
+                const charContacts = await getStorage().getItem(charKey);
                 if (Array.isArray(charContacts) && charContacts.length) {
                     for (const cc of charContacts) {
                         if (cc?.persistForChar) {
@@ -392,50 +330,38 @@ window.STPhone.Apps.Contacts = (function () {
         }
 
         if (changed) {
-            await saveToIDB(); // 병합 결과 반영
+            await saveToStorage(); // 병합 결과 반영
         }
     }
 
-    async function saveToIDB() {
+    async function saveToStorage() {
         const key = getStorageKey();
         if (!key) return;
         try {
-            await idbSet(key, JSON.stringify(contacts));
+            // [수정] 통합 저장소에 저장
+            await getStorage().setItem(key, contacts);
         } catch (e) {
-            console.warn('[Contacts] IndexedDB 저장 실패:', e);
+            console.warn('[Contacts] 저장 실패:', e);
         }
     }
 
-    // 외부에서 기존처럼 "loadContacts()"를 호출하면
-    // - 메모리 캐시가 현재 채팅용으로 세팅되도록 하고
-    // - 백그라운드 로드를 트리거(필요시)
-    function loadContacts() {
+    // [Async] 외부에서 호출 시 사용
+    async function loadContacts() {
         const key = getStorageKey();
-        if (!key) { contacts = []; IDB_STATE.loadedKey = null; return; }
-        if (IDB_STATE.loadedKey !== key) {
-            IDB_STATE.loadedKey = key;
-            contacts = [];
-            // 백그라운드 로드 & 병합
-            loadFromIDBForCurrentChat().catch(() => {});
-        }
-    }
-
-    async function ensureChatLoaded() {
-        const key = getStorageKey();
-        if (!key) { contacts = []; IDB_STATE.loadedKey = null; return; }
-        if (IDB_STATE.loadedKey !== key) {
-            await loadFromIDBForCurrentChat();
+        if (!key) { contacts = []; loadedKey = null; return; }
+        if (loadedKey !== key) {
+            await loadContactsFromStorage();
         }
     }
 
     // ─────────────────────────────────────────────────────────
-    // 봇 태그 / 캐릭터별 연락처: IndexedDB 버전
+    // 봇 태그 / 캐릭터별 연락처 (수정됨)
     // ─────────────────────────────────────────────────────────
     async function saveBotTagsForCharacter(tags) {
         const key = getBotTagsStorageKey();
         if (!key) return;
         try {
-            await idbSet(key, String(tags || ''));
+            await getStorage().setItem(key, String(tags || ''));
             console.log('[Contacts] 봇 외모 태그 캐릭터별 저장:', tags);
         } catch (e) {
             console.error('[Contacts] 봇 태그 저장 실패:', e);
@@ -446,7 +372,7 @@ window.STPhone.Apps.Contacts = (function () {
         const key = getBotTagsStorageKey();
         if (!key) return '';
         try {
-            return (await idbGet(key)) || '';
+            return (await getStorage().getItem(key)) || '';
         } catch (e) {
             return '';
         }
@@ -457,8 +383,7 @@ window.STPhone.Apps.Contacts = (function () {
         if (!key) return;
 
         try {
-            const raw = await idbGet(key);
-            let charContacts = raw ? JSON.parse(raw) : [];
+            let charContacts = await getStorage().getItem(key);
             if (!Array.isArray(charContacts)) charContacts = [];
 
             const idx = charContacts.findIndex(c => (c?.name || '').toLowerCase() === (contactData.name || '').toLowerCase());
@@ -467,21 +392,9 @@ window.STPhone.Apps.Contacts = (function () {
             } else {
                 charContacts.push({ ...contactData, id: 'char_' + Date.now() });
             }
-            await idbSet(key, JSON.stringify(charContacts));
+            await getStorage().setItem(key, charContacts);
         } catch (e) {
             console.error('[Contacts] 캐릭터별 저장 실패:', e);
-        }
-    }
-
-    async function loadContactsForCharacter() {
-        const key = getCharacterStorageKey();
-        if (!key) return [];
-        try {
-            const raw = await idbGet(key);
-            const arr = raw ? JSON.parse(raw) : [];
-            return Array.isArray(arr) ? arr : [];
-        } catch (e) {
-            return [];
         }
     }
 
@@ -489,13 +402,12 @@ window.STPhone.Apps.Contacts = (function () {
         const key = getCharacterStorageKey();
         if (!key || !name) return false;
         try {
-            const raw = await idbGet(key);
-            const charContacts = raw ? JSON.parse(raw) : [];
+            const charContacts = await getStorage().getItem(key);
             const next = (Array.isArray(charContacts) ? charContacts : []).filter(
                 c => (c?.name || '').toLowerCase() !== String(name).toLowerCase()
             );
-            if (next.length === charContacts.length) return false;
-            await idbSet(key, JSON.stringify(next));
+            if (next.length === (charContacts ? charContacts.length : 0)) return false;
+            await getStorage().setItem(key, next);
             return true;
         } catch (e) {
             console.error('[Contacts] 캐릭터별 삭제 실패:', e);
@@ -532,13 +444,10 @@ window.STPhone.Apps.Contacts = (function () {
         return '';
     }
 
-    async function getUserInfo() { /* 위에 정의한 것으로 사용 (중복 방지용 placeholder) */ }
-
     async function syncUserProfileToSettings() {
         const ctx = window.SillyTavern?.getContext?.();
         if (!ctx) return;
 
-        // 실제 getUserInfo는 위에 정의되어 있음 (IDE 중복 경고 피하기 위해 유지)
         const realGetUserInfo = (async () => {
             const name = await resolveMacro('{{user}}');
             const persona = await resolveMacro('{{persona}}');
@@ -584,7 +493,7 @@ window.STPhone.Apps.Contacts = (function () {
         const charInfo = await getCharacterInfo();
         if (!charInfo || !charInfo.name) return null;
 
-        await ensureChatLoaded();
+        await loadContacts(); // [Async] 데이터 로드 대기
         let botContact = contacts.find(c => c.id === BOT_CONTACT_ID);
 
         // 캐릭터별 저장된 외모 태그
@@ -601,7 +510,7 @@ window.STPhone.Apps.Contacts = (function () {
                 createdAt: Date.now(),
             };
             contacts.unshift(botContact);
-            await saveToIDB();
+            await saveToStorage();
             console.log('[Contacts] 봇 연락처 자동 생성:', charInfo.name, savedBotTags ? '(태그 복원됨)' : '');
         } else {
             let updated = false;
@@ -611,7 +520,7 @@ window.STPhone.Apps.Contacts = (function () {
                 if (charInfo.description && botContact.persona !== charInfo.description) { botContact.persona = charInfo.description; updated = true; }
                 if (!botContact.tags && savedBotTags) { botContact.tags = savedBotTags; updated = true; }
                 if (updated) {
-                    await saveToIDB();
+                    await saveToStorage();
                     console.log('[Contacts] 봇 연락처 업데이트:', charInfo.name);
                 }
             }
@@ -632,17 +541,17 @@ window.STPhone.Apps.Contacts = (function () {
     }
 
     function getContact(id) {
-        loadContacts();
+        // loadContacts()는 async이므로, 여기서는 이미 로드된 메모리 상의 contacts를 반환
         return contacts.find(c => c.id === id);
     }
 
     function getAllContacts() {
-        loadContacts();
         return [...contacts];
     }
 
-    function addContact(data) {
-        loadContacts();
+    async function addContact(data) {
+        // [Async]
+        await loadContacts();
         const c = {
             id: generateId(),
             name: data.name || '새 연락처',
@@ -656,36 +565,36 @@ window.STPhone.Apps.Contacts = (function () {
             createdAt: Date.now(),
         };
         contacts.push(c);
-        saveToIDB(); // 비동기 저장
+        await saveToStorage();
         return c;
     }
 
-    function updateContact(id, data) {
-        loadContacts();
+    async function updateContact(id, data) {
+        await loadContacts();
         const i = contacts.findIndex(c => c.id === id);
         if (i >= 0) {
             contacts[i] = { ...contacts[i], ...data };
-            saveToIDB(); // 비동기 저장
+            await saveToStorage();
 
             // 봇 연락처의 태그가 수정되면 캐릭터별로 저장
             if (id === BOT_CONTACT_ID && data.tags !== undefined) {
-                saveBotTagsForCharacter(data.tags); // await 불필요
+                await saveBotTagsForCharacter(data.tags);
             }
             return contacts[i];
         }
         return null;
     }
 
-    function deleteContactById(id) {
-        loadContacts();
+    async function deleteContactById(id) {
+        await loadContacts();
         const i = contacts.findIndex(c => c.id === id);
         if (i >= 0) {
             const deleted = contacts[i];
             contacts.splice(i, 1);
-            saveToIDB(); // 비동기 저장
+            await saveToStorage();
 
             if (deleted?.persistForChar) {
-                deleteContactForCharacterByName(deleted.name); // await 불필요
+                await deleteContactForCharacterByName(deleted.name);
             }
             return true;
         }
@@ -693,15 +602,15 @@ window.STPhone.Apps.Contacts = (function () {
     }
 
     async function open() {
-        // 먼저 봇 연락처 자동 동기화
+        // [Async] 데이터 준비
         await syncAutoContacts();
-        await ensureChatLoaded();
+        await loadContacts();
 
         // 기존 유저 연락처(__st_user__) 자동 정리
         const idx = contacts.findIndex(c => c.id === '__st_user__');
         if (idx >= 0) {
             contacts.splice(idx, 1);
-            await saveToIDB();
+            await saveToStorage();
             console.log('[Contacts] 기존 유저 연락처 정리됨');
         }
 
@@ -726,16 +635,16 @@ window.STPhone.Apps.Contacts = (function () {
 
                 listHtml += `
                     <div class="st-contact-item" data-id="${c.id}">
-                        ${c.avatar || DEFAULT_AVATAR}
+                        <img class="st-contact-avatar" src="${c.avatar || DEFAULT_AVATAR}" onerror="this.src='${DEFAULT_AVATAR}'">
                         <div class="st-contact-info">
                             <div class="st-contact-name">${c.name}${syncBadge}</div>
                             <div class="st-contact-preview">${c.persona?.substring(0, 30) || ''}</div>
                         </div>
                         <div class="st-contact-actions">
-                            msg
+                            <button class="st-contact-action-btn msg" data-action="msg" data-id="${c.id}">
                                 <i class="fa-regular fa-comment"></i>
                             </button>
-                            call
+                            <button class="st-contact-action-btn call" data-action="call" data-id="${c.id}">
                                 <i class="fa-solid fa-phone"></i>
                             </button>
                         </div>
@@ -800,7 +709,7 @@ window.STPhone.Apps.Contacts = (function () {
                 <div class="st-contact-edit-content">
                     ${autoSyncNotice}
                     <div class="st-contact-edit-avatar-wrap">
-                        ${c?.avatar || DEFAULT_AVATAR}
+                        <img class="st-contact-edit-avatar" id="st-edit-avatar" src="${c?.avatar || DEFAULT_AVATAR}" onerror="this.src='${DEFAULT_AVATAR}'">
                         <label class="st-contact-edit-avatar-label" for="st-edit-avatar-file">사진 변경</label>
                         <input type="file" id="st-edit-avatar-file" accept="image/*" style="display:none;">
                     </div>
@@ -856,7 +765,8 @@ window.STPhone.Apps.Contacts = (function () {
         $('#st-edit-cancel').on('click', () => $('#st-contact-edit').remove());
         $('#st-edit-delete').on('click', async () => {
             if (c && confirm('삭제하시겠습니까?')) {
-                const deleted = deleteContactById(c.id);
+                // [Async]
+                const deleted = await deleteContactById(c.id);
                 $('#st-contact-edit').remove();
                 if (deleted) toastr.success('연락처가 삭제되었습니다');
                 await open();
@@ -896,7 +806,7 @@ window.STPhone.Apps.Contacts = (function () {
             reader.readAsDataURL(file);
         });
 
-        $('#st-edit-save').on('click', () => {
+        $('#st-edit-save').on('click', async () => {
             const name = $('#st-edit-name').val().trim();
             if (!name) { toastr.warning('이름을 입력하세요'); return; }
 
@@ -916,15 +826,15 @@ window.STPhone.Apps.Contacts = (function () {
             };
             if (isAutoSync !== undefined) data.isAutoSync = isAutoSync;
 
-            if (c) updateContact(c.id, data);
-            else addContact(data);
+            // [Async]
+            if (c) await updateContact(c.id, data);
+            else await addContact(data);
 
             if (persistForChar) {
-                // 캐릭터 전용 저장(비동기)
-                saveContactForCharacter(data);
+                await saveContactForCharacter(data);
             }
             $('#st-contact-edit').remove();
-            open();
+            await open();
             toastr.success('저장되었습니다');
         });
 

@@ -5,53 +5,15 @@ window.STPhone.Apps.Notes = (function() {
     'use strict';
 
     // ==========================================
-    // [NEW] IndexedDB Helper
+    // [수정됨] 내부 DB 코드 삭제 -> 통합 저장소 사용
     // ==========================================
-    const IDB_NAME = 'STPhone_Data_DB';
-    const IDB_VERSION = 1;
-    const STORE_NAME = 'keyvalue_store';
-
-    const DB = {
-        db: null,
-        init: function() {
-            return new Promise((resolve, reject) => {
-                if (this.db) return resolve(this.db);
-                const request = indexedDB.open(IDB_NAME, IDB_VERSION);
-                request.onupgradeneeded = (e) => {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(STORE_NAME)) {
-                        db.createObjectStore(STORE_NAME);
-                    }
-                };
-                request.onsuccess = (e) => {
-                    this.db = e.target.result;
-                    resolve(this.db);
-                };
-                request.onerror = (e) => {
-                    console.error('[Notes] DB Init Error', e);
-                    reject(e);
-                };
-            });
-        },
-        get: async function(key) {
-            await this.init();
-            return new Promise((resolve) => {
-                const tx = this.db.transaction(STORE_NAME, 'readonly');
-                const req = tx.objectStore(STORE_NAME).get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => resolve(null);
-            });
-        },
-        set: async function(key, value) {
-            await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = this.db.transaction(STORE_NAME, 'readwrite');
-                const req = tx.objectStore(STORE_NAME).put(value, key);
-                req.onsuccess = () => resolve();
-                req.onerror = (e) => reject(e);
-            });
-        }
-    };
+    
+    // [Helper] 저장소 인스턴스 가져오기
+    function getStorage() {
+        if (window.STPhoneStorage) return window.STPhoneStorage;
+        console.error('[Notes] window.STPhoneStorage가 초기화되지 않았습니다.');
+        return localforage; 
+    }
 
     const css = `<style> .st-notes-app { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 999; display: flex; flex-direction: column; background: var(--pt-bg-color, #f5f5f7); color: var(--pt-text-color, #000); font-family: var(--pt-font, -apple-system, sans-serif); } .st-notes-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 20px 15px; flex-shrink: 0; } .st-notes-title { font-size: 28px; font-weight: 700; } .st-notes-add { background: var(--pt-accent, #007aff); color: white; border: none; width: 32px; height: 32px; border-radius: 50%; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; } .st-notes-list { flex: 1; overflow-y: auto; padding: 10px 20px 80px; } .st-note-item { background: var(--pt-card-bg, #fff); border-radius: 12px; padding: 15px; margin-bottom: 10px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.04); } .st-note-item-title { font-weight: 600; font-size: 16px; margin-bottom: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .st-note-item-preview { font-size: 14px; color: var(--pt-sub-text, #86868b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .st-note-item-date { font-size: 12px; color: var(--pt-sub-text, #86868b); margin-top: 8px; } .st-notes-empty { text-align: center; padding: 80px 24px; color: var(--pt-sub-text, #86868b); } .st-note-edit { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--pt-bg-color, #f5f5f7); display: flex; flex-direction: column; z-index: 1001; } .st-note-edit-header { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid var(--pt-border, #e5e5e5); flex-shrink: 0; } .st-note-edit-btn { background: none; border: none; color: var(--pt-accent, #007aff); font-size: 16px; cursor: pointer; } .st-note-edit-btn.delete { color: #ff3b30; } .st-note-edit-content { flex: 1; display: flex; flex-direction: column; padding: 15px; overflow: hidden; } .st-note-edit-title { border: none; background: transparent; font-size: 24px; font-weight: 600; color: var(--pt-text-color, #000); margin-bottom: 15px; outline: none; } .st-note-edit-body { flex: 1; border: 1px solid var(--pt-border, #e5e5e5); background: var(--pt-card-bg, #f5f5f7); font-size: 14px; color: var(--pt-text-color, #000); resize: none; outline: none; line-height: 1.6; border-radius: 12px; padding: 14px 16px; } </style>`;
 
@@ -68,7 +30,8 @@ window.STPhone.Apps.Notes = (function() {
         const key = getStorageKey();
         if (!key) { notes = []; return; }
         try {
-            notes = (await DB.get(key)) || [];
+            // [수정됨] 통합 저장소 사용
+            notes = (await getStorage().getItem(key)) || [];
         } catch (e) { notes = []; }
     }
 
@@ -76,7 +39,8 @@ window.STPhone.Apps.Notes = (function() {
     async function saveNotes() {
         const key = getStorageKey();
         if (!key) return;
-        await DB.set(key, notes);
+        // [수정됨] 통합 저장소 사용
+        await getStorage().setItem(key, notes);
     }
 
     // [Async]
