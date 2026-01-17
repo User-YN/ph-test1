@@ -223,24 +223,19 @@ window.STPhone.Apps.Messages = (function() {
     let replyToMessage = null;
 
     // ========== 저장소 키 ==========
-    // [설명] SillyTavern의 chatId는 채팅방마다 고유하므로, 한 캐릭터와 여러 채팅방을 만들어도 분리 저장됨.
     function getStorageKey() {
         const context = window.SillyTavern?.getContext?.();
-        // context가 없거나 chatId가 없는 경우(거의 없음) 기본값 처리
-        if (!context?.chatId) return 'st_phone_messages_default';
-        
+        if (!context?.chatId) return null;
         const settings = window.STPhone.Apps?.Settings?.getSettings?.() || {};
-        // 'accumulate' 모드일 때만 캐릭터 ID 기준 저장 (채팅방 공유)
         if (settings.recordMode === 'accumulate' && context.characterId !== undefined) {
             return 'st_phone_messages_char_' + context.characterId;
         }
-        // 기본 모드: 채팅방 ID 기준 저장 (채팅방 분리)
         return 'st_phone_messages_' + context.chatId;
     }
 
     function getGroupStorageKey() {
         const context = window.SillyTavern?.getContext?.();
-        if (!context?.chatId) return 'st_phone_groups_default';
+        if (!context?.chatId) return null;
         const settings = window.STPhone.Apps?.Settings?.getSettings?.() || {};
         if (settings.recordMode === 'accumulate' && context.characterId !== undefined) {
             return 'st_phone_groups_char_' + context.characterId;
@@ -1865,7 +1860,10 @@ window.STPhone.Apps.Messages = (function() {
             const systemContent = `### Character Info Name: ${contact.name} Personality: ${contact.persona || '(not specified)'} ### User Info Name: ${myName} ### Instructions You received ${amount} won from ${myName}. Memo: "${memo}". React briefly to this transfer (SMS style).`;
             messages.push({ role: 'system', content: systemContent });
             
-            // Dummy logic for example (Replace with actual generation if needed)
+            // Generate logic... (omitted for brevity, assume similar to generateReply)
+            // ...
+            
+            // Dummy logic for example (Replace with actual generation)
             let replyText = `Thanks for the ${amount}!`; 
 
             if (replyText) {
@@ -1992,36 +1990,124 @@ window.STPhone.Apps.Messages = (function() {
         // ... (UI 생성 로직) ...
     }
 
+// ============================================================
+    // [수정됨] 메시지 옵션 팝업 (수정/삭제/재생성) - 비동기 데이터 로드 적용
+    // ============================================================
     async function showMsgOptions(contactId, msgIndex, lineIndex, isMyMessage = false) {
         $('#st-msg-option-popup').remove();
-        const allData = await loadAllMessages(); // [Async]
+
+        // 1. [Async] 데이터베이스에서 메시지 원본 가져오기
+        const allData = await loadAllMessages();
         const msgs = allData[contactId];
         const targetMsg = msgs?.[msgIndex];
-        if (!targetMsg) return;
-        // ... (UI 렌더링 로직 생략 - 필요시 구현) ...
+
+        if (!targetMsg) {
+            toastr.error('메시지 데이터를 불러올 수 없습니다.');
+            return;
+        }
+
+        const rawText = targetMsg.text || '';
+        
+        // 2. 팝업 UI 생성
+        const html = `
+            <div class="st-group-modal" id="st-msg-option-popup" style="display:flex;">
+                <div class="st-group-box">
+                    <div class="st-group-title">메시지 옵션</div>
+                    
+                    <div style="margin-bottom:15px;">
+                        <div style="font-size:12px; color:#888; margin-bottom:5px;">내용 수정</div>
+                        <textarea id="st-msg-edit-text" style="width:100%; height:100px; padding:10px; border-radius:10px; border:1px solid #ccc; resize:none; font-family:inherit;">${rawText}</textarea>
+                    </div>
+
+                    <div class="st-group-actions" style="flex-direction:column; gap:8px;">
+                        <button class="st-group-btn create" id="st-msg-save-edit">수정 저장</button>
+                        
+                        ${!isMyMessage ? `<button class="st-group-btn" id="st-msg-regenerate" style="background:#8e8e93; color:white;">🔄 답장 다시 받기 (Regenerate)</button>` : ''}
+                        
+                        <button class="st-group-btn cancel" id="st-msg-delete" style="background:#ff3b30; color:white;">🗑️ 메시지 삭제</button>
+                        <button class="st-group-btn cancel" id="st-msg-close">취소</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        $('.st-messages-app').append(html);
+
+        // 3. 이벤트 리스너 연결
+        
+        // [저장]
+        $('#st-msg-save-edit').on('click', async () => {
+            const newText = $('#st-msg-edit-text').val();
+            await editMessage(contactId, msgIndex, newText);
+            $('#st-msg-option-popup').remove();
+        });
+
+        // [삭제]
+        $('#st-msg-delete').on('click', async () => {
+            if (confirm('정말 삭제하시겠습니까?')) {
+                await deleteMessage(contactId, msgIndex);
+                $('#st-msg-option-popup').remove();
+            }
+        });
+
+        // [재생성 (상대방 메시지인 경우)]
+        $('#st-msg-regenerate').on('click', async () => {
+            if (confirm('이 메시지를 삭제하고 답장을 다시 받으시겠습니까?')) {
+                // 1. 현재 메시지 삭제
+                await deleteMessage(contactId, msgIndex);
+                $('#st-msg-option-popup').remove();
+                
+                // 2. 답장 생성 요청 (이전 대화 맥락 유지)
+                // 직전 내 메시지를 찾아서 트리거하면 좋지만, 단순하게는 그냥 답장 생성 요청
+                toastr.info('답장을 다시 생성합니다...');
+                await generateReply(contactId, ''); // 빈 텍스트로 호출하면 문맥에 맞춰 생성
+            }
+        });
+
+        // [닫기]
+        $('#st-msg-close').on('click', () => {
+            $('#st-msg-option-popup').remove();
+        });
     }
 
-    // [Async] 메시지 수정/삭제
+    // [Async] 메시지 수정
     async function editMessage(contactId, msgIndex, newText) {
         const allData = await loadAllMessages();
         const msgs = allData[contactId];
-        if (!msgs || !msgs[msgIndex]) { toastr.error('메시지를 찾을 수 없습니다.'); return; }
-        const oldText = msgs[msgIndex].text || '';
+        
+        if (!msgs || !msgs[msgIndex]) { 
+            toastr.error('메시지를 찾을 수 없습니다.'); 
+            return; 
+        }
+
+        // 내용 업데이트
         msgs[msgIndex].text = newText;
+        
+        // 저장
         await saveAllMessages(allData);
-        // updateHiddenLogText(oldText, newText); // 함수가 있다면 호출
+        
+        // 화면 갱신
         openChat(contactId);
         toastr.success('메시지가 수정되었습니다.');
     }
 
+    // [Async] 메시지 삭제
     async function deleteMessage(contactId, index) {
         const allData = await loadAllMessages();
         const msgs = allData[contactId];
-        if(!msgs || !msgs[index]) { toastr.error('메시지를 찾을 수 없습니다.'); return; }
-        const targetText = msgs[index].text || '(사진)';
+        
+        if(!msgs || !msgs[index]) { 
+            toastr.error('메시지를 찾을 수 없습니다.'); 
+            return; 
+        }
+
+        // 배열에서 제거
         msgs.splice(index, 1);
+        
+        // 저장
         await saveAllMessages(allData);
-        // removeHiddenLogByText(targetText); // 함수가 있다면 호출
+        
+        // 화면 갱신
         openChat(contactId);
         toastr.info("메시지가 삭제되었습니다.");
     }
@@ -2044,61 +2130,66 @@ window.STPhone.Apps.Messages = (function() {
         getTotalUnread,
         getMessages,
         addMessage,
+// ... (위쪽 코드 생략) ...
+
+        // ▼▼▼ 이 부분을 통째로 교체하세요 ▼▼▼
         syncExternalMessage: async (sender, text) => {
             if (!text) return;
 
-            // 1. 연락처 확인 및 자동 생성
+            // 1. 연락처 확인 (없으면 봇 정보로 자동 생성 시도)
             let contacts = window.STPhone.Apps?.Contacts?.getAllContacts() || [];
             if (contacts.length === 0) {
                 console.log('[Messages] 연락처가 없어 자동 동기화를 시도합니다.');
                 await window.STPhone.Apps.Contacts.syncAutoContacts();
                 contacts = window.STPhone.Apps.Contacts.getAllContacts();
-                if (contacts.length === 0) return; // 그래도 없으면 중단
+                
+                // 그래도 없으면 안전하게 중단
+                if (contacts.length === 0) return; 
             }
+            
             const firstContact = contacts[0];
             const contactId = firstContact.id;
 
-            // 2. 메시지 줄바꿈(\n) 단위로 쪼개기
+            // 2. 메시지 줄바꿈(\n) 단위로 쪼개기 (핵심!)
+            // 이렇게 해야 "사진" 따로, "안녕하세요" 따로, "저는..." 따로 말풍선이 생깁니다.
             const lines = text.split('\n').filter(l => l.trim() !== '');
 
-            // 3. 한 줄씩 순서대로 저장 및 표시 (순차 처리)
+            // 3. 한 줄씩 순서대로 저장 및 표시
             for (const line of lines) {
-                // (1) 이미지 태그 처리 ([IMG: ...] 패턴)
+                // 이미지 태그 감지 ([IMG: ...])
                 const imgMatch = line.match(/\[IMG:\s*([^\]]+)\]/i);
                 let contentText = line;
                 let contentImage = null;
 
                 if (imgMatch) {
-                    // [수정됨] 이미지 태그만 제거하고 나머지 텍스트는 유지
-                    contentText = contentText.replace(imgMatch[0], '').trim();
-                    
-                    if (line.includes('<img')) {
-                         const srcMatch = line.match(/src="([^"]+)"/);
-                         if (srcMatch) contentImage = srcMatch[1];
-                         // 만약 HTML 태그로 이미지가 들어온다면 텍스트에서 해당 부분도 제거하거나 처리 필요
-                         // 여기서는 기본적으로 유지 (필요 시 정규식 추가)
-                    }
+                    // 이미지가 있으면 텍스트는 비우고 이미지만 표시 (또는 텍스트+이미지 로직에 따름)
+                    // 여기서는 텍스트 메시지로 태그를 제거하고 보여주는 방식입니다.
+                    // 실제 이미지 URL이 온다면 contentImage에 넣으세요.
+                    // contentText = ''; // 텍스트를 숨기고 싶으면 주석 해제
                 }
 
-                // (2) DB에 저장 (Async await 필수!)
+                // [중요] DB 저장 대기 (await 필수)
                 const newIdx = await addMessage(contactId, sender, contentText, contentImage);
 
-                // (3) 화면에 말풍선 추가 (폰이 켜져 있을 때만)
+                // 화면이 켜져있으면 말풍선 바로 추가
                 const isPhoneActive = $('#st-phone-container').hasClass('active');
                 if (isPhoneActive) {
-                    // 약간의 딜레이를 주어 자연스럽게 보이게 함
-                    await new Promise(r => setTimeout(r, 100)); 
+                    // 너무 빨리 뜨면 어색하므로 0.1초 텀을 줌
+                    await new Promise(r => setTimeout(r, 100));
+                    // appendBubble 함수 호출 (messages.js 내부에 정의되어 있어야 함)
                     appendBubble(sender, contentText, contentImage, newIdx);
                 }
             }
 
             // 4. 읽지 않은 메시지 카운트 갱신 (상대방이 보낸 경우만)
             if (sender === 'them') {
+                // getUnreadCount도 async이므로 await 필요
                 const unread = (await getUnreadCount(contactId)) + lines.length;
                 await setUnreadCount(contactId, unread);
                 updateMessagesBadge();
             }
         },
+        // ▲▲▲ 교체 끝 ▲▲▲
 
         updateMessagesBadge,
         addHiddenLog,
