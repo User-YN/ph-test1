@@ -223,19 +223,24 @@ window.STPhone.Apps.Messages = (function() {
     let replyToMessage = null;
 
     // ========== 저장소 키 ==========
+    // [설명] SillyTavern의 chatId는 채팅방마다 고유하므로, 한 캐릭터와 여러 채팅방을 만들어도 분리 저장됨.
     function getStorageKey() {
         const context = window.SillyTavern?.getContext?.();
-        if (!context?.chatId) return null;
+        // context가 없거나 chatId가 없는 경우(거의 없음) 기본값 처리
+        if (!context?.chatId) return 'st_phone_messages_default';
+        
         const settings = window.STPhone.Apps?.Settings?.getSettings?.() || {};
+        // 'accumulate' 모드일 때만 캐릭터 ID 기준 저장 (채팅방 공유)
         if (settings.recordMode === 'accumulate' && context.characterId !== undefined) {
             return 'st_phone_messages_char_' + context.characterId;
         }
+        // 기본 모드: 채팅방 ID 기준 저장 (채팅방 분리)
         return 'st_phone_messages_' + context.chatId;
     }
 
     function getGroupStorageKey() {
         const context = window.SillyTavern?.getContext?.();
-        if (!context?.chatId) return null;
+        if (!context?.chatId) return 'st_phone_groups_default';
         const settings = window.STPhone.Apps?.Settings?.getSettings?.() || {};
         if (settings.recordMode === 'accumulate' && context.characterId !== undefined) {
             return 'st_phone_groups_char_' + context.characterId;
@@ -1860,10 +1865,7 @@ window.STPhone.Apps.Messages = (function() {
             const systemContent = `### Character Info Name: ${contact.name} Personality: ${contact.persona || '(not specified)'} ### User Info Name: ${myName} ### Instructions You received ${amount} won from ${myName}. Memo: "${memo}". React briefly to this transfer (SMS style).`;
             messages.push({ role: 'system', content: systemContent });
             
-            // Generate logic... (omitted for brevity, assume similar to generateReply)
-            // ...
-            
-            // Dummy logic for example (Replace with actual generation)
+            // Dummy logic for example (Replace with actual generation if needed)
             let replyText = `Thanks for the ${amount}!`; 
 
             if (replyText) {
@@ -2067,14 +2069,14 @@ window.STPhone.Apps.Messages = (function() {
                 let contentImage = null;
 
                 if (imgMatch) {
-                    // 이미지 태그가 있으면 텍스트에서 제거하고 이미지 URL로 간주 (또는 생성 요청)
-                    // 외부 동기화의 경우, 보통 이미지가 생성되어 URL로 오거나 텍스트로 옴
-                    // 여기서는 텍스트를 정리하고 이미지는 null로 둡니다 (이미지 처리는 복잡하므로 텍스트로 보여줌)
-                    // 만약 ST에서 이미지를 <img> 태그로 보낸다면 아래 로직이 필요함:
+                    // [수정됨] 이미지 태그만 제거하고 나머지 텍스트는 유지
+                    contentText = contentText.replace(imgMatch[0], '').trim();
+                    
                     if (line.includes('<img')) {
                          const srcMatch = line.match(/src="([^"]+)"/);
                          if (srcMatch) contentImage = srcMatch[1];
-                         contentText = ''; // 이미지만 표시
+                         // 만약 HTML 태그로 이미지가 들어온다면 텍스트에서 해당 부분도 제거하거나 처리 필요
+                         // 여기서는 기본적으로 유지 (필요 시 정규식 추가)
                     }
                 }
 
@@ -2084,14 +2086,6 @@ window.STPhone.Apps.Messages = (function() {
                 // (3) 화면에 말풍선 추가 (폰이 켜져 있을 때만)
                 const isPhoneActive = $('#st-phone-container').hasClass('active');
                 if (isPhoneActive) {
-                    // appendBubble 함수는 messages.js 내부에 있는 함수입니다.
-                    // 이 코드가 return { ... } 안에 있으므로, 내부 함수에 접근하려면 
-                    // 모듈 내부 스코프에서 호출해야 합니다.
-                    // 다행히 이 코드는 모듈 내부이므로 appendBubble을 바로 호출할 수 있습니다.
-                    
-                    // ※ 주의: 위쪽 코드에 appendBubble 함수가 정의되어 있어야 합니다.
-                    // 제가 드린 코드에는 정의되어 있습니다.
-                    
                     // 약간의 딜레이를 주어 자연스럽게 보이게 함
                     await new Promise(r => setTimeout(r, 100)); 
                     appendBubble(sender, contentText, contentImage, newIdx);
