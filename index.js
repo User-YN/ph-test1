@@ -2,7 +2,7 @@
   'use strict';
 
   const EXTENSION_NAME = 'ST Phone System';
-  const EXTENSION_FOLDER = 'st-phone-system';
+  const EXTENSION_FOLDER = 'ph-test1';
   const BASE_PATH = `/scripts/extensions/third-party/${EXTENSION_FOLDER}`;
 
   // ─────────────────────────────────────────────────────────────────────────────
